@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime
+from datetime import date
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from tbot_sheduler.bot.booking_service import (
     create_booking,
+    cancel_booking,
+    change_booking,
     get_available_slots,
     get_user_bookings,
 )
@@ -33,8 +35,15 @@ class CancelRequest(BaseModel):
     booking_id: int
 
 
+class ChangeRequest(BaseModel):
+    """Booking change request."""
+    booking_id: int
+    new_slot_id: int
+    notify_minutes: int = 10
+
+
 def _verify_init_data(init_data: str) -> int:
-    """Verify initData and return user_id. Raises HTTPException on failure."""
+    """Verify initData and return user_id."""
     parsed = validate_init_data(init_data, BOT_TOKEN)
     if not parsed:
         raise HTTPException(status_code=403, detail="Invalid initData")
@@ -51,14 +60,26 @@ def _verify_init_data(init_data: str) -> int:
     return user_id
 
 
+def _get_user_name(init_data: str) -> str | None:
+    """Extract user name from initData."""
+    parsed = validate_init_data(init_data, BOT_TOKEN)
+    if not parsed:
+        return None
+    try:
+        user_data = json.loads(parsed.get("user", "{}"))
+        name = user_data.get("first_name", "")
+        if user_data.get("last_name"):
+            name += f" {user_data['last_name']}"
+        return name or None
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
 @router.get("/book/slots")
 async def list_slots(
     request: Request, channel_id: int, date_str: str
 ) -> list[dict]:
-    """Get available slots for a channel and date.
-
-    Requires valid initData in X-Init-Data header.
-    """
+    """Get available slots for a channel and date."""
     init_data = request.headers.get("X-Init-Data", "")
     _verify_init_data(init_data)
 
@@ -68,22 +89,15 @@ async def list_slots(
         raise HTTPException(status_code=400, detail="Invalid date format")
 
     db_session = request.app.state.db_session
-    slots = await get_available_slots(db_session, channel_id, target_date)
-    return slots
+    return await get_available_slots(db_session, channel_id, target_date)
 
 
 @router.post("/book")
-async def book_slot(
-    request: Request, body: BookingRequest
-) -> dict:
-    """Book a slot.
-
-    Requires valid initData in X-Init-Data header.
-    """
+async def book_slot(request: Request, body: BookingRequest) -> dict:
+    """Book a slot."""
     init_data = request.headers.get("X-Init-Data", "")
     user_id = _verify_init_data(init_data)
 
-    # Anti-flood check
     if not anti_flood.check(user_id):
         raise HTTPException(
             status_code=429,
@@ -91,18 +105,7 @@ async def book_slot(
         )
 
     db_session = request.app.state.db_session
-
-    # Parse user name from initData
-    user_name = None
-    try:
-        parsed = validate_init_data(init_data, BOT_TOKEN)
-        if parsed:
-            user_data = json.loads(parsed.get("user", "{}"))
-            user_name = user_data.get("first_name", "")
-            if user_data.get("last_name"):
-                user_name += f" {user_data['last_name']}"
-    except (json.JSONDecodeError, ValueError):
-        pass
+    user_name = _get_user_name(init_data)
 
     result = await create_booking(
         db_session=db_session,
@@ -116,18 +119,107 @@ async def book_slot(
     if not result["success"]:
         raise HTTPException(status_code=409, detail=result["error"])
 
+    # Schedule JobQueue notification
+    try:
+        from tbot_sheduler.bot.notification_service import schedule_notification
+        from datetime import datetime
+
+        job_queue = request.app.state.bot_app.job_queue if hasattr(request.app.state, 'bot_app') else None
+        if job_queue:
+            notify_at = datetime.fromisoformat(result.get("notify_at", ""))
+            await schedule_notification(
+                job_queue=job_queue,
+                booking_id=result["booking_id"],
+                user_id=user_id,
+                notify_at=notify_at,
+                slot_date=result.get("date", ""),
+                slot_time=f"{result.get('start_time', '')}-{result.get('end_time', '')}",
+            )
+    except Exception as e:
+        logger.error("Failed to schedule notification: %s", e)
+
     return result
 
 
 @router.get("/my-bookings")
 async def my_bookings(request: Request) -> list[dict]:
-    """Get current user's bookings.
-
-    Requires valid initData in X-Init-Data header.
-    """
+    """Get current user's bookings."""
     init_data = request.headers.get("X-Init-Data", "")
     user_id = _verify_init_data(init_data)
 
     db_session = request.app.state.db_session
-    bookings = await get_user_bookings(db_session, user_id)
-    return bookings
+    return await get_user_bookings(db_session, user_id)
+
+
+@router.post("/cancel")
+async def cancel_book(request: Request, body: CancelRequest) -> dict:
+    """Cancel a booking."""
+    init_data = request.headers.get("X-Init-Data", "")
+    user_id = _verify_init_data(init_data)
+
+    if not anti_flood.check(user_id):
+        raise HTTPException(
+            status_code=429,
+            detail="Слишком часто. Попробуйте через 5 секунд.",
+        )
+
+    db_session = request.app.state.db_session
+    result = await cancel_booking(db_session, body.booking_id, user_id)
+
+    if not result["success"]:
+        raise HTTPException(status_code=404, detail=result["error"])
+
+    # Remove JobQueue task if exists
+    removed_job_id = result.get("removed_job_id")
+    if removed_job_id:
+        try:
+            bot_app = getattr(request.app.state, 'bot_app', None)
+            if bot_app and bot_app.job_queue:
+                bot_app.job_queue.scheduler.remove_job(removed_job_id)
+                logger.info("Removed JobQueue task %s for cancelled booking", removed_job_id)
+        except Exception as e:
+            logger.warning("Could not remove JobQueue task %s: %s", removed_job_id, e)
+
+    return {"success": True, "slot_id": result["slot_id"]}
+
+
+@router.post("/change")
+async def change_book(request: Request, body: ChangeRequest) -> dict:
+    """Change a booking to a different slot."""
+    init_data = request.headers.get("X-Init-Data", "")
+    user_id = _verify_init_data(init_data)
+
+    if not anti_flood.check(user_id):
+        raise HTTPException(
+            status_code=429,
+            detail="Слишком часто. Попробуйте через 5 секунд.",
+        )
+
+    db_session = request.app.state.db_session
+    result = await change_booking(
+        db_session, body.booking_id, body.new_slot_id, user_id, body.notify_minutes,
+    )
+
+    if not result["success"]:
+        raise HTTPException(status_code=409, detail=result["error"])
+
+    # Schedule new JobQueue notification
+    try:
+        from tbot_sheduler.bot.notification_service import schedule_notification
+        from datetime import datetime
+
+        job_queue = request.app.state.bot_app.job_queue if hasattr(request.app.state, 'bot_app') else None
+        if job_queue and result.get("notify_at"):
+            notify_at = datetime.fromisoformat(result["notify_at"])
+            await schedule_notification(
+                job_queue=job_queue,
+                booking_id=result["booking_id"],
+                user_id=user_id,
+                notify_at=notify_at,
+                slot_date=result.get("date", ""),
+                slot_time=f"{result.get('start_time', '')}-{result.get('end_time', '')}",
+            )
+    except Exception as e:
+        logger.error("Failed to reschedule notification after change: %s", e)
+
+    return result

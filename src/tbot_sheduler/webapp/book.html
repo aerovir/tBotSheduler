@@ -247,7 +247,96 @@
             notifyMinutes = minutes;
         }
 
+        // My bookings
+        async function loadMyBookings() {
+            document.getElementById('myBookings').innerHTML = '<p>Загрузка...</p>';
+            try {
+                const bookings = await apiCall('/api/my-bookings');
+                if (bookings.length === 0) {
+                    document.getElementById('myBookings').innerHTML = '<p style="color:var(--tg-theme-hint-color,#888)">У вас пока нет броней.</p>';
+                    return;
+                }
+
+                let html = '';
+                for (const b of bookings) {
+                    html += `
+                        <div class="booking-item">
+                            <div><b>📅 ${b.date}</b></div>
+                            <div>🕐 ${b.start_time} — ${b.end_time}</div>
+                            <div style="font-size:13px;color:var(--tg-theme-hint-color,#888);margin-bottom:8px">Напомнить за ${b.notify_minutes} мин</div>
+                            <div style="display:flex;gap:8px">
+                                <button class="btn" style="font-size:13px;padding:6px 12px" onclick="cancelBooking(${b.booking_id})">❌ Отменить</button>
+                                <button class="btn btn-secondary" style="font-size:13px;padding:6px 12px" onclick="startChangeBooking(${b.booking_id})">🔄 Изменить</button>
+                            </div>
+                        </div>
+                    `;
+                }
+                document.getElementById('myBookings').innerHTML = html;
+            } catch (e) {
+                document.getElementById('myBookings').innerHTML = `<p style="color:red">Ошибка: ${e.message}</p>`;
+            }
+        }
+
+        // Cancel booking with confirmation
+        async function cancelBooking(bookingId) {
+            Telegram.showConfirm('❌ Отменить эту бронь?', async (confirmed) => {
+                if (!confirmed) return;
+                try {
+                    const result = await apiCall('/api/cancel', {
+                        method: 'POST',
+                        body: JSON.stringify({ booking_id: bookingId }),
+                    });
+                    if (result.success) {
+                        Telegram.showAlert('✅ Бронь отменена. Слот снова свободен.');
+                        loadMyBookings();
+                    }
+                } catch (e) {
+                    Telegram.showAlert('❌ Ошибка: ' + e.message);
+                }
+            });
+        }
+
+        // Change booking
+        let changeBookingId = null;
+
+        async function startChangeBooking(bookingId) {
+            changeBookingId = bookingId;
+            showTab('book', document.querySelector('.tab'));
+            Telegram.showAlert('Выберите новый слот из календаря и нажмите "Забронировать"');
+        }
+
         async function confirmBooking() {
+            if (changeBookingId) {
+                // Changing existing booking
+                if (!selectedSlotId) return;
+                const btn = document.querySelector('#modal .btn');
+                btn.disabled = true;
+                btn.textContent = '⏳ Изменение...';
+                try {
+                    const result = await apiCall('/api/change', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            booking_id: changeBookingId,
+                            new_slot_id: selectedSlotId,
+                            notify_minutes: notifyMinutes,
+                        }),
+                    });
+                    if (result.success) {
+                        Telegram.showAlert('✅ Бронь изменена! Новый слот: ' + selectedTime);
+                        changeBookingId = null;
+                        closeModal();
+                        if (selectedDate) selectDate(selectedDate);
+                    } else {
+                        Telegram.showAlert('❌ ' + (result.error || 'Ошибка'));
+                    }
+                } catch (e) {
+                    Telegram.showAlert('❌ Ошибка: ' + e.message);
+                }
+                btn.disabled = false;
+                btn.textContent = '✅ Подтвердить';
+                return;
+            }
+
             if (!selectedSlotId) return;
             const btn = document.querySelector('#modal .btn');
             btn.disabled = true;
@@ -275,32 +364,6 @@
 
             btn.disabled = false;
             btn.textContent = '✅ Подтвердить';
-        }
-
-        // My bookings
-        async function loadMyBookings() {
-            document.getElementById('myBookings').innerHTML = '<p>Загрузка...</p>';
-            try {
-                const bookings = await apiCall('/api/my-bookings');
-                if (bookings.length === 0) {
-                    document.getElementById('myBookings').innerHTML = '<p style="color:var(--tg-theme-hint-color,#888)">У вас пока нет броней.</p>';
-                    return;
-                }
-
-                let html = '';
-                for (const b of bookings) {
-                    html += `
-                        <div class="booking-item">
-                            <div><b>📅 ${b.date}</b></div>
-                            <div>🕐 ${b.start_time} — ${b.end_time}</div>
-                            <div style="font-size:13px;color:var(--tg-theme-hint-color,#888)">Напомнить за ${b.notify_minutes} мин</div>
-                        </div>
-                    `;
-                }
-                document.getElementById('myBookings').innerHTML = html;
-            } catch (e) {
-                document.getElementById('myBookings').innerHTML = `<p style="color:red">Ошибка: ${e.message}</p>`;
-            }
         }
 
         function showTab(tab, el) {
