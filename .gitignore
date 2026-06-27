@@ -2,7 +2,11 @@
 .env
 .env.local
 .env.production
-.env.example
+
+# Coverage
+.coverage
+htmlcov/
+*.coverage.*
 
 # Python
 __pycache__/
