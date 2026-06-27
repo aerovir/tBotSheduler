@@ -4,7 +4,9 @@ import logging
 import os
 import shutil
 import time
+from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any, Optional
 
 import psutil
 from fastapi import APIRouter, Request
@@ -23,11 +25,56 @@ class HealthStatus(str, Enum):
     DOWN = "down"
 
 
-async def _check_database(request: Request) -> dict:
+EMOJI_MAP = {
+    HealthStatus.OK: "✅",
+    HealthStatus.DEGRADED: "⚠️",
+    HealthStatus.DOWN: "❌",
+}
+
+
+@dataclass
+class HealthContext:
+    """Container for health check dependencies.
+
+    Can be populated from either FastAPI request or bot application.
+    """
+
+    engine: Any = None
+    bot_app: Any = None
+    db_session: Any = None
+    started_at: float = field(default_factory=time.monotonic)
+
+
+def _extract_context(request_or_bot: Request | Any) -> HealthContext:
+    """Create HealthContext from FastAPI Request or bot Application."""
+    ctx = HealthContext()
+
+    if isinstance(request_or_bot, Request):
+        ctx.engine = getattr(request_or_bot.app.state, "engine", None)
+        ctx.bot_app = getattr(request_or_bot.app.state, "bot_app", None)
+        ctx.db_session = getattr(request_or_bot.app.state, "db_session", None)
+        ctx.started_at = getattr(
+            request_or_bot.app.state, "started_at", time.monotonic()
+        )
+    else:
+        # Bot Application
+        ctx.bot_app = request_or_bot
+        ctx.engine = getattr(request_or_bot, "_health_engine", None)
+        ctx.db_session = getattr(request_or_bot, "_health_db_session", None)
+        ctx.started_at = getattr(
+            request_or_bot, "_start_time", time.monotonic()
+        )
+
+    return ctx
+
+
+async def _check_database(ctx: HealthContext) -> dict:
     """Check database connectivity and WAL mode."""
     try:
-        engine = request.app.state.engine
-        async with engine.connect() as conn:
+        if ctx.engine is None:
+            return {"status": HealthStatus.DOWN, "detail": "engine not initialized"}
+
+        async with ctx.engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
             row = await conn.execute(text("PRAGMA journal_mode"))
             mode = row.scalar()
@@ -47,9 +94,9 @@ async def _check_database(request: Request) -> dict:
     return {"status": status, "detail": detail}
 
 
-async def _check_bot(request: Request) -> dict:
+async def _check_bot(ctx: HealthContext) -> dict:
     """Check if bot application is running."""
-    application = getattr(request.app.state, "bot_app", None)
+    application = ctx.bot_app
     if application is None or not application.running:
         return {"status": HealthStatus.DOWN, "detail": "bot is not running"}
 
@@ -66,9 +113,9 @@ async def _check_bot(request: Request) -> dict:
     return {"status": status, "detail": detail}
 
 
-async def _check_telegram_api(request: Request) -> dict:
+async def _check_telegram_api(ctx: HealthContext) -> dict:
     """Check Telegram API connectivity."""
-    application = getattr(request.app.state, "bot_app", None)
+    application = ctx.bot_app
     if application is None:
         return {"status": HealthStatus.DOWN, "detail": "bot not initialized"}
 
@@ -127,10 +174,10 @@ async def _check_memory() -> dict:
     return {"status": status, "detail": detail}
 
 
-async def _check_scheduler(request: Request) -> dict:
+async def _check_scheduler(ctx: HealthContext) -> dict:
     """Check heartbeat: pending notifications."""
     try:
-        db_session = getattr(request.app.state, "db_session", None)
+        db_session = ctx.db_session
         if db_session is None:
             return {"status": HealthStatus.DOWN, "detail": "db_session not initialized"}
 
@@ -150,19 +197,27 @@ async def _check_scheduler(request: Request) -> dict:
     return {"status": status, "detail": detail}
 
 
-async def run_healthcheck(request: Request) -> dict:
-    """Run all health checks and return aggregated result."""
+async def run_healthcheck(request_or_bot: Request | Any) -> dict:
+    """Run all health checks and return aggregated result.
+
+    Args:
+        request_or_bot: FastAPI Request object or telegram.ext.Application
+
+    Returns:
+        Dict with overall status, version, uptime and per-check results.
+    """
     import asyncio
 
+    ctx = _extract_context(request_or_bot)
     start = time.monotonic()
 
     checks = await asyncio.gather(
-        _check_database(request),
-        _check_bot(request),
-        _check_telegram_api(request),
+        _check_database(ctx),
+        _check_bot(ctx),
+        _check_telegram_api(ctx),
         _check_disk(),
         _check_memory(),
-        _check_scheduler(request),
+        _check_scheduler(ctx),
         return_exceptions=True,
     )
 
@@ -200,7 +255,7 @@ async def run_healthcheck(request: Request) -> dict:
         "status": overall,
         "version": BOT_VERSION,
         "uptime_seconds": int(
-            time.monotonic() - getattr(request.app.state, "started_at", time.monotonic())
+            time.monotonic() - ctx.started_at
         ),
         "response_time_ms": int((time.monotonic() - start) * 1000),
         "checks": results,
