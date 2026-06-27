@@ -1,0 +1,15 @@
+.git
+.gitignore
+*.md
+*.pyc
+__pycache__/
+.env
+.env.*
+venv/
+.venv/
+tests/
+.claude/
+.coverage
+bot.db
+logs/
+backups/

@@ -1,0 +1,29 @@
+version: "3.8"
+
+services:
+  bot:
+    build: .
+    container_name: tbot-sheduler
+    restart: always
+    ports:
+      - "8000:8000"
+    volumes:
+      - bot_data:/data
+      - bot_logs:/app/logs
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:////data/bot.db
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  bot_data:
+    name: tbot_sheduler_data
+  bot_logs:
+    name: tbot_sheduler_logs
