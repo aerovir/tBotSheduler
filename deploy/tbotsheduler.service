@@ -1,0 +1,16 @@
+[Unit]
+Description=tBotSheduler
+After=network.target
+
+[Service]
+Type=simple
+User=tbot
+WorkingDirectory=/opt/tBotSheduler
+ExecStart=/opt/tBotSheduler/venv/bin/python -m tbot_sheduler
+Restart=always
+RestartSec=10
+Environment="PATH=/opt/tBotSheduler/venv/bin"
+EnvironmentFile=/opt/tBotSheduler/.env
+
+[Install]
+WantedBy=multi-user.target
