@@ -27,6 +27,13 @@
 
 **Критерий приёмки**: `python -m app.main` → бот отвечает на `/start`, БД `bot.db` (WAL mode) создалась с индексами, FastAPI доступен на `:8000/health`, rate limiter активен, graceful shutdown не роняет JobQueue задачи. `pytest --cov-fail-under=80` проходит для модулей Milestone 1.
 
+### External API (после Milestone 1)
+- **[Модели]** ApiClient, Webhook, WebhookDeliveryLog, Integration — включить в `Base.metadata.create_all`
+- **[Rate limiter]** In-memory sliding window (asyncio.Lock + deque). Middleware для `/api/v1/*`
+- **[Deps]** Добавить `httpx`, `icalendar`, `cryptography` в `requirements.txt`
+- **[Healthcheck]** Добавить проверки `external_api`, `webhook_dispatcher` в `/health`
+- **[TDD]** — unit-тесты новых моделей (создание, связи, каскады, индексы)
+- **[TDD]** — unit-тест rate limiter: 60 запросов разрешены, 61-й блокирован, окно сдвигается
 ---
 
 ## 2. Milestone 2: Админ-панель
@@ -68,6 +75,17 @@
 
 **Критерий приёмки**: Owner создал слоты, добавил модератора и разработчика, broadcast в канал. Модератор создал/удалил слот, не может добавить модератора. Developer вызывает /health, /logs, /version, не может создать слот. Healthcheck на `/health` показывает ok по всем узлам. `pytest --cov-fail-under=80` проходит.
 
+### External API (после Milestone 2)
+- **[Команды]** `/api_keys`, `/create_api_key <name>`, `/revoke_api_key <id>`
+- **[Команды]** `/webhooks`, `/add_webhook <url> <events>`, `/remove_webhook <id>`, `/test_webhook <id>`
+- **[Контроль доступа]** `@check_role('owner')` на все команды управления API/вебхуками
+- **[Scaffold]** Роутер `/api/v1/*`, auth-dependency (проверка X-API-Key, is_active, expires_at, permissions)
+- **[Endpoints]** GET/PUT `/api/v1/channels` (read-only или настройки)
+- **[AuditLog]** Логировать каждый API-запрос (api_client_id, method, endpoint, IP, status)
+- **[TDD]** — интеграционные тесты: создание/отзыв/список API-ключей, auth (200/401/403), permissions
+- **[TDD]** — интеграционный тест: read-only ключ пробует POST → 403
+- **[TDD]** — интеграционный тест: rate limiter → 429
+
 ---
 
 ## 3. Milestone 3: Бронирование + Уведомления
@@ -100,6 +118,17 @@
 
 **Критерий приёмки**: Пользователь забронировал слот → получил подтверждение → за N минут до начала пришло уведомление в личку (без дублей). В таблице видно занятые слоты. Race condition исключён. AuditLog хранит цепочку действий. `pytest --cov-fail-under=80` проходит.
 
+### External API (после Milestone 3)
+- **[Endpoints]** GET/POST `/api/v1/slots` — список + создание слотов
+- **[Endpoints]** GET `/api/v1/slots/{id}` — слот со статусом брони
+- **[Endpoints]** GET/POST `/api/v1/bookings` — список + создание брони
+- **[Webhook dispatcher]** Модуль `app/webhook/dispatcher.py` — находит подписанные вебхуки по событию, POST через `httpx.AsyncClient`
+- **[Webhook событие]** `booking.created` → dispatch
+- **[Webhook подпись]** HMAC-SHA256(body, secret), заголовки X-Webhook-*
+- **[TDD]** — интеграционный тест: создание брони через API (валидный ключ)
+- **[TDD]** — интеграционный тест: webhook delivery на booking.created (mock aioresponses)
+- **[TDD]** — unit-тест: webhook signing + verification
+
 ---
 
 ## 4. Milestone 4: Отмена и изменение
@@ -119,6 +148,19 @@
 - **Надёжность:** подтверждение отмены (пользователь подтверждает действие)
 
 **Критерий приёмки**: Пользователь отменил бронь → слот освободился → уведомление в JobQueue удалено → другой может забронировать. Изменение слота работает. AuditLog фиксирует изменения. `pytest --cov-fail-under=80` проходит.
+
+### External API (после Milestone 4)
+- **[Endpoints]** PUT/DELETE `/api/v1/slots/{id}` — обновление + удаление слота
+- **[Endpoints]** DELETE `/api/v1/bookings/{id}` — отмена брони
+- **[Webhook события]** `booking.cancelled`, `booking.changed`, `slot.created`, `slot.deleted`, `slot.updated`
+- **[Webhook retry]** Retry-механизм: 5 попыток (0s → 10s → 1m → 5m → 15m), запись в WebhookDeliveryLog
+- **[Webhook degradation]** После 5 неудач → флаг `is_degraded = True`, уведомление админу
+- **[Webhook idempotency]** X-Webhook-Delivery UUID, один UUID на всю цепочку ретраев
+- **[SSRF защита]** Проверка URL вебхука: только HTTPS, блокировка internal IP
+- **[TDD]** — интеграционный тест: отмена брони через API → webhook cancelled
+- **[TDD]** — интеграционный тест: retry (500 → retry → 200 → delivered)
+- **[TDD]** — интеграционный тест: max retries → is_degraded
+- **[TDD]** — unit-тест: SSRF-валидация (приватные IP блокирует)
 
 ---
 
@@ -143,3 +185,16 @@
 - Проверка финального покрытия: `pytest --cov=app --cov-fail-under=80`
 
 **Критерий приёмки**: Все доп. фичи работают. Проект готов к деплою на Timeweb VPS с systemd, fail2ban, бекапами и пользователем `tbot`. Покрытие кода тестами ≥ 80%.
+
+### External API (после Milestone 5)
+- **[iCal экспорт]** `GET /api/v1/schedule.ics` — генерация .ics из расписания
+- **[iCal импорт]** `POST /api/v1/schedule.ics` — парсинг VEVENT, создание слотов
+- **[iCal валидация]** Дубликаты, пересечение времени, sanity check дат
+- **[Интеграции]** Telegram команды: `/integrations`, `/add_integration <type>`, `/remove_integration <id>`
+- **[Webhook degradation]** Фоновый мониторинг: уведомление админу при is_degraded
+- **[Auto-cleanup]** Удаление delivery logs старше 30 дней
+- **[API docs]** Swagger/ReDoc на `/api/v1/docs`
+- **[TDD]** — unit-тест: генерация .ics → валидный iCal
+- **[TDD]** — интеграционный тест: импорт .ics → создание слотов → проверка дубликатов
+- **[TDD]** — e2e-тест: API-ключ → слот → броня → webhook → отмена → webhook
+- **[TDD]** — e2e-тест: iCal экспорт → парсинг → импорт → верификация
