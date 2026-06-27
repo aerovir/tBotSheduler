@@ -21,6 +21,26 @@ from telegram.constants import ParseMode
 
 from tbot_sheduler.api.router import api_router
 from tbot_sheduler.bot.handlers import start_command
+from tbot_sheduler.bot.admin_handlers import (
+    setup_command,
+    add_moderator_command,
+    remove_moderator_command,
+    moderators_command,
+    add_developer_command,
+    remove_developer_command,
+    developers_command,
+)
+from tbot_sheduler.bot.developer_handlers import (
+    health_command,
+    logs_command,
+    version_command,
+)
+from tbot_sheduler.bot.slot_handlers import (
+    create_slots_command,
+    slots_command,
+    free_slot_command,
+    broadcast_command,
+)
 from tbot_sheduler.bot.scheduler import check_pending
 from tbot_sheduler.core.config import BOT_TOKEN, LOG_LEVEL
 from tbot_sheduler.core.database import (
@@ -88,7 +108,28 @@ def _create_bot_app() -> Application:
     )
 
     # Register handlers
+    # Public
     application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("setup", setup_command))
+
+    # Owner-only delegation commands
+    application.add_handler(CommandHandler("add_moderator", add_moderator_command))
+    application.add_handler(CommandHandler("remove_moderator", remove_moderator_command))
+    application.add_handler(CommandHandler("moderators", moderators_command))
+    application.add_handler(CommandHandler("add_developer", add_developer_command))
+    application.add_handler(CommandHandler("remove_developer", remove_developer_command))
+    application.add_handler(CommandHandler("developers", developers_command))
+
+    # Developer + owner technical commands
+    application.add_handler(CommandHandler("health", health_command))
+    application.add_handler(CommandHandler("logs", logs_command))
+    application.add_handler(CommandHandler("version", version_command))
+
+    # Owner + moderator slot management
+    application.add_handler(CommandHandler("create_slots", create_slots_command))
+    application.add_handler(CommandHandler("slots", slots_command))
+    application.add_handler(CommandHandler("free_slot", free_slot_command))
+    application.add_handler(CommandHandler("broadcast", broadcast_command))
 
     # Global error handler
     application.add_error_handler(_on_error)
@@ -143,7 +184,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Healthcheck on startup
     from tbot_sheduler.api.health import run_healthcheck
 
-    health_data = await run_healthcheck(app)
+    # Create a mock request-like object for healthcheck
+    from fastapi import Request as FastAPIRequest
+    scope = {
+        "type": "http",
+        "app": app,
+    }
+    mock_request = FastAPIRequest(scope)  # type: ignore[arg-type]
+
+    health_data = await run_healthcheck(mock_request)
     if health_data["status"] != "ok":
         logger.warning(
             "Healthcheck at startup: %s", health_data["status"]
@@ -160,6 +209,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await bot_app.initialize()
     await bot_app.start()
     await bot_app.updater.start_polling()
+
+    # Set bot_data after initialization
+    bot_app.bot_data["db_session"] = app.state.db_session
+    bot_app.bot_data["engine"] = engine
+
+    # Store engine/db for bot healthcheck access
+    bot_app._health_engine = engine
+    bot_app._health_db_session = app.state.db_session
+    bot_app._start_time = started_at
+
     logger.info("Bot started polling")
 
     yield  # App is running here
