@@ -163,6 +163,15 @@ async def cancel_booking(
         }
 
     slot_id = booking.slot_id
+    old_job_id = None
+
+    # Find existing notification job_id
+    notif_result = await db_session.execute(
+        select(Notification).where(Notification.booking_id == booking_id)
+    )
+    notification = notif_result.scalar_one_or_none()
+    if notification:
+        old_job_id = notification.job_id
 
     # Audit log
     log = AuditLog(
@@ -181,7 +190,61 @@ async def cancel_booking(
     return {
         "success": True,
         "slot_id": slot_id,
+        "removed_job_id": old_job_id,
     }
+
+
+async def change_booking(
+    db_session: AsyncSession,
+    booking_id: int,
+    new_slot_id: int,
+    user_id: int,
+    notify_minutes: int = 10,
+) -> dict[str, Any]:
+    """Change a booking to a different slot.
+
+    Cancels old booking, creates new one in a single logical operation.
+
+    Returns:
+        Dict with new booking info or error.
+    """
+    # First cancel old booking
+    cancel_result = await cancel_booking(db_session, booking_id, user_id)
+    if not cancel_result["success"]:
+        return cancel_result
+
+    # Find the old booking's slot for audit
+    old_slot_id = cancel_result["slot_id"]
+
+    # Create new booking
+    create_result = await create_booking(
+        db_session=db_session,
+        slot_id=new_slot_id,
+        user_id=user_id,
+        user_name=None,
+        notify_minutes=notify_minutes,
+    )
+    if not create_result["success"]:
+        return create_result
+
+    # Update audit log for the change
+    log = AuditLog(
+        action="booking_changed",
+        user_id=user_id,
+        slot_id=new_slot_id,
+        booking_id=create_result["booking_id"],
+        details={
+            "old_slot_id": old_slot_id,
+            "new_slot_id": new_slot_id,
+            "old_booking_id": booking_id,
+        },
+    )
+    db_session.add(log)
+    await db_session.commit()
+
+    create_result["old_booking_id"] = booking_id
+    create_result["old_slot_id"] = old_slot_id
+    return create_result
 
 
 async def get_user_bookings(
