@@ -21,9 +21,9 @@ async def create_slots_page() -> str:
 
 
 @router.get("/webapp/book", response_class=HTMLResponse)
-async def booking_page() -> str:
-    """Serve the user booking Web App (placeholder for Milestone 3)."""
-    return HTMLResponse(
-        "<h1>Бронирование</h1><p>Раздел в разработке.</p>",
-        status_code=200,
-    )
+async def booking_page() -> HTMLResponse:
+    """Serve the user booking Web App."""
+    file_path = WEBAPP_DIR / "book.html"
+    if file_path.exists():
+        return HTMLResponse(file_path.read_text(encoding="utf-8"))
+    return HTMLResponse("<h1>Web App not found</h1>", status_code=404)
