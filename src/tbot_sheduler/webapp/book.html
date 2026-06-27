@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Бронирование</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--tg-theme-bg-color, #fff);
+            color: var(--tg-theme-text-color, #000);
+            padding: 16px;
+            max-width: 480px;
+            margin: 0 auto;
+        }
+        h1 { font-size: 20px; margin-bottom: 16px; }
+        h2 { font-size: 16px; margin: 16px 0 8px; }
+        .nav { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .nav button { background: var(--tg-theme-button-color, #2481cc); color: var(--tg-theme-button-text-color, #fff); border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+        .nav span { font-weight: 500; }
+        .calendar { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-bottom: 16px; }
+        .cal-header { text-align: center; font-size: 12px; color: var(--tg-theme-hint-color, #888); padding: 4px; }
+        .cal-day { text-align: center; padding: 8px 4px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+        .cal-day:hover { background: var(--tg-theme-secondary-bg-color, #eee); }
+        .cal-day.today { font-weight: 600; }
+        .cal-day.selected { background: var(--tg-theme-button-color, #2481cc); color: var(--tg-theme-button-text-color, #fff); }
+        .cal-day.other { color: var(--tg-theme-hint-color, #ccc); }
+        .slot-list { margin-top: 8px; }
+        .slot-item {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 12px; border: 1px solid var(--tg-theme-secondary-bg-color, #e0e0e0);
+            border-radius: 8px; margin-bottom: 8px;
+        }
+        .slot-time { font-size: 16px; font-weight: 500; }
+        .slot-status { font-size: 13px; }
+        .slot-status.available { color: #4CAF50; }
+        .slot-status.booked { color: var(--tg-theme-hint-color, #888); }
+        .btn {
+            display: inline-block; padding: 8px 16px; border: none; border-radius: 6px;
+            font-size: 14px; cursor: pointer;
+            background: var(--tg-theme-button-color, #2481cc);
+            color: var(--tg-theme-button-text-color, #fff);
+        }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-secondary { background: var(--tg-theme-secondary-bg-color, #e0e0e0); color: var(--tg-theme-text-color, #000); }
+        .tab-bar { display: flex; gap: 0; margin-bottom: 16px; border-radius: 8px; overflow: hidden; }
+        .tab { flex: 1; padding: 10px; text-align: center; cursor: pointer; font-size: 14px; background: var(--tg-theme-secondary-bg-color, #eee); }
+        .tab.active { background: var(--tg-theme-button-color, #2481cc); color: var(--tg-theme-button-text-color, #fff); }
+        .booking-item { padding: 12px; border: 1px solid var(--tg-theme-secondary-bg-color, #e0e0e0); border-radius: 8px; margin-bottom: 8px; }
+        .notif-options { display: flex; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
+        .notif-option { padding: 6px 12px; border: 1px solid var(--tg-theme-secondary-bg-color, #ddd); border-radius: 6px; cursor: pointer; font-size: 13px; }
+        .notif-option.selected { background: var(--tg-theme-button-color, #2481cc); color: var(--tg-theme-button-text-color, #fff); border-color: var(--tg-theme-button-color, #2481cc); }
+        #loading { text-align: center; padding: 40px; color: var(--tg-theme-hint-color, #888); }
+        #noSlots { text-align: center; padding: 20px; color: var(--tg-theme-hint-color, #888); }
+    </style>
+</head>
+<body>
+    <div id="loading">Загрузка...</div>
+
+    <div id="app" style="display:none">
+        <h1>📅 Бронирование</h1>
+
+        <div class="tab-bar">
+            <div class="tab active" onclick="showTab('book', this)">Забронировать</div>
+            <div class="tab" onclick="showTab('my', this)">Мои брони</div>
+        </div>
+
+        <!-- Booking tab -->
+        <div id="tab-book">
+            <h2>Выберите дату</h2>
+            <div class="nav">
+                <button onclick="changeMonth(-1)">←</button>
+                <span id="monthYear"></span>
+                <button onclick="changeMonth(1)">→</button>
+            </div>
+            <div class="calendar" id="calendar"></div>
+
+            <h2>Доступные слоты</h2>
+            <div id="slotList" class="slot-list">
+                <p id="noSlots">Выберите дату, чтобы увидеть слоты</p>
+            </div>
+        </div>
+
+        <!-- My bookings tab -->
+        <div id="tab-my" style="display:none">
+            <h2>Мои брони</h2>
+            <div id="myBookings"></div>
+        </div>
+    </div>
+
+    <!-- Booking modal -->
+    <div id="modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;padding:40px 16px;">
+        <div style="background:var(--tg-theme-bg-color,#fff);border-radius:12px;padding:20px;max-width:400px;margin:0 auto;">
+            <h3>Подтверждение брони</h3>
+            <p id="modalDate" style="margin:8px 0"></p>
+            <p id="modalTime" style="margin:8px 0;font-weight:500"></p>
+            <div style="margin:12px 0">
+                <label style="font-size:14px;color:var(--tg-theme-hint-color,#888)">Напомнить за:</label>
+                <div class="notif-options">
+                    <div class="notif-option" onclick="selectNotify(this, 5)">5 мин</div>
+                    <div class="notif-option selected" onclick="selectNotify(this, 10)">10 мин</div>
+                    <div class="notif-option" onclick="selectNotify(this, 15)">15 мин</div>
+                    <div class="notif-option" onclick="selectNotify(this, 30)">30 мин</div>
+                    <div class="notif-option" onclick="selectNotify(this, 60)">1 час</div>
+                </div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:16px">
+                <button class="btn" style="flex:1" onclick="confirmBooking()">✅ Подтвердить</button>
+                <button class="btn btn-secondary" style="flex:1" onclick="closeModal()">Отмена</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const Telegram = window.Telegram?.WebApp;
+        if (!Telegram) {
+            document.body.innerHTML = '<p style="padding:20px">❌ Это приложение доступно только внутри Telegram</p>';
+            throw new Error('Not in Telegram');
+        }
+        Telegram.expand();
+
+        const API_BASE = window.location.origin;
+        let currentDate = new Date();
+        let selectedDate = null;
+        let selectedSlotId = null;
+        let selectedTime = '';
+        let notifyMinutes = 10;
+
+        function getInitData() {
+            return Telegram.initData;
+        }
+
+        async function apiCall(path, options = {}) {
+            const headers = {
+                'X-Init-Data': getInitData(),
+                'Content-Type': 'application/json',
+            };
+            const res = await fetch(API_BASE + path, { ...options, headers });
+            if (!res.ok) {
+                const err = await res.text();
+                throw new Error(err || `HTTP ${res.status}`);
+            }
+            return res.json();
+        }
+
+        // Calendar
+        function renderCalendar() {
+            const year = currentDate.getFullYear();
+            const month = currentDate.getMonth();
+            document.getElementById('monthYear').textContent =
+                new Date(year, month).toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+
+            const firstDay = new Date(year, month, 1).getDay();
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const today = new Date();
+
+            let html = '<div class="cal-header">Пн</div><div class="cal-header">Вт</div><div class="cal-header">Ср</div><div class="cal-header">Чт</div><div class="cal-header">Пт</div><div class="cal-header">Сб</div><div class="cal-header">Вс</div>';
+
+            // Empty cells before first day (Monday = 1)
+            const startOffset = firstDay === 0 ? 6 : firstDay - 1;
+            for (let i = 0; i < startOffset; i++) {
+                html += '<div></div>';
+            }
+
+            for (let d = 1; d <= daysInMonth; d++) {
+                const dateObj = new Date(year, month, d);
+                const dateStr = dateObj.toISOString().split('T')[0];
+                const isToday = dateObj.toDateString() === today.toDateString();
+                const isPast = dateObj < new Date(today.getFullYear(), today.getMonth(), today.getDate());
+                const isSelected = selectedDate === dateStr;
+
+                let cls = 'cal-day';
+                if (isToday) cls += ' today';
+                if (isSelected) cls += ' selected';
+                if (isPast) cls += ' other';
+
+                html += `<div class="${cls}" onclick="${isPast ? '' : `selectDate('${dateStr}')`}">${d}</div>`;
+            }
+
+            document.getElementById('calendar').innerHTML = html;
+        }
+
+        function changeMonth(delta) {
+            currentDate.setMonth(currentDate.getMonth() + delta);
+            renderCalendar();
+        }
+
+        // Slot selection
+        async function selectDate(dateStr) {
+            selectedDate = dateStr;
+            renderCalendar();
+            document.getElementById('slotList').innerHTML = '<p id="loading">Загрузка слотов...</p>';
+
+            try {
+                // Get channel_id from URL params or default
+                const params = new URLSearchParams(window.location.search);
+                const channelId = params.get('channel_id') || 1;
+
+                const slots = await apiCall(`/api/book/slots?channel_id=${channelId}&date_str=${dateStr}`);
+
+                if (slots.length === 0) {
+                    document.getElementById('slotList').innerHTML = '<p id="noSlots">Нет доступных слотов на эту дату</p>';
+                    return;
+                }
+
+                let html = '';
+                for (const slot of slots) {
+                    const status = slot.available ? 'Свободно' : 'Занято';
+                    const cls = slot.available ? 'available' : 'booked';
+                    html += `
+                        <div class="slot-item">
+                            <div>
+                                <div class="slot-time">${slot.start_time} — ${slot.end_time}</div>
+                                <div class="slot-status ${cls}">${status}</div>
+                            </div>
+                            ${slot.available
+                                ? `<button class="btn" onclick="openBooking(${slot.id}, '${slot.start_time}', '${slot.end_time}')">Забронировать</button>`
+                                : '<button class="btn btn-secondary" disabled>Занято</button>'
+                            }
+                        </div>
+                    `;
+                }
+                document.getElementById('slotList').innerHTML = html;
+            } catch (e) {
+                document.getElementById('slotList').innerHTML = `<p style="color:red">Ошибка загрузки: ${e.message}</p>`;
+            }
+        }
+
+        function openBooking(slotId, startTime, endTime) {
+            selectedSlotId = slotId;
+            selectedTime = `${startTime} — ${endTime}`;
+            document.getElementById('modalDate').textContent = `📅 ${selectedDate}`;
+            document.getElementById('modalTime').textContent = `🕐 ${selectedTime}`;
+            document.getElementById('modal').style.display = 'block';
+        }
+
+        function closeModal() {
+            document.getElementById('modal').style.display = 'none';
+            selectedSlotId = null;
+        }
+
+        function selectNotify(el, minutes) {
+            document.querySelectorAll('.notif-option').forEach(e => e.classList.remove('selected'));
+            el.classList.add('selected');
+            notifyMinutes = minutes;
+        }
+
+        async function confirmBooking() {
+            if (!selectedSlotId) return;
+            const btn = document.querySelector('#modal .btn');
+            btn.disabled = true;
+            btn.textContent = '⏳ Бронирование...';
+
+            try {
+                const result = await apiCall('/api/book', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        slot_id: selectedSlotId,
+                        notify_minutes: notifyMinutes,
+                    }),
+                });
+
+                if (result.success) {
+                    Telegram.showAlert('✅ Слот забронирован!\nМы напомним за ' + notifyMinutes + ' минут до начала.');
+                    closeModal();
+                    if (selectedDate) selectDate(selectedDate);
+                } else {
+                    Telegram.showAlert('❌ ' + (result.error || 'Ошибка бронирования'));
+                }
+            } catch (e) {
+                Telegram.showAlert('❌ Ошибка: ' + e.message);
+            }
+
+            btn.disabled = false;
+            btn.textContent = '✅ Подтвердить';
+        }
+
+        // My bookings
+        async function loadMyBookings() {
+            document.getElementById('myBookings').innerHTML = '<p>Загрузка...</p>';
+            try {
+                const bookings = await apiCall('/api/my-bookings');
+                if (bookings.length === 0) {
+                    document.getElementById('myBookings').innerHTML = '<p style="color:var(--tg-theme-hint-color,#888)">У вас пока нет броней.</p>';
+                    return;
+                }
+
+                let html = '';
+                for (const b of bookings) {
+                    html += `
+                        <div class="booking-item">
+                            <div><b>📅 ${b.date}</b></div>
+                            <div>🕐 ${b.start_time} — ${b.end_time}</div>
+                            <div style="font-size:13px;color:var(--tg-theme-hint-color,#888)">Напомнить за ${b.notify_minutes} мин</div>
+                        </div>
+                    `;
+                }
+                document.getElementById('myBookings').innerHTML = html;
+            } catch (e) {
+                document.getElementById('myBookings').innerHTML = `<p style="color:red">Ошибка: ${e.message}</p>`;
+            }
+        }
+
+        function showTab(tab, el) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.getElementById('tab-book').style.display = tab === 'book' ? 'block' : 'none';
+            document.getElementById('tab-my').style.display = tab === 'my' ? 'block' : 'none';
+            if (el) el.classList.add('active');
+            if (tab === 'my') loadMyBookings();
+        }
+
+        // Init
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('app').style.display = 'block';
+        renderCalendar();
+    </script>
+</body>
+</html>

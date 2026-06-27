@@ -1,0 +1,210 @@
+"""Booking logic: create, cancel, check availability."""
+from __future__ import annotations
+
+import logging
+from datetime import date, datetime, timedelta
+from typing import Any
+
+from sqlalchemy import select, and_
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from tbot_sheduler.models import Booking, Slot, AuditLog, Notification
+
+logger = logging.getLogger(__name__)
+
+
+async def get_available_slots(
+    db_session: AsyncSession, channel_id: int, target_date: date
+) -> list[dict[str, Any]]:
+    """Get available (unbooked) slots for a given channel and date."""
+    result = await db_session.execute(
+        select(Slot).where(
+            Slot.channel_id == channel_id,
+            Slot.date == target_date,
+            Slot.is_active == True,
+        ).order_by(Slot.start_time)
+    )
+    slots = result.scalars().all()
+
+    available = []
+    for slot in slots:
+        bookings_count = len(slot.bookings)
+        available.append({
+            "id": slot.id,
+            "date": str(slot.date),
+            "start_time": slot.start_time.strftime("%H:%M"),
+            "end_time": slot.end_time.strftime("%H:%M"),
+            "available": bookings_count == 0,
+        })
+
+    return available
+
+
+async def create_booking(
+    db_session: AsyncSession,
+    slot_id: int,
+    user_id: int,
+    user_name: str | None = None,
+    comment: str | None = None,
+    notify_minutes: int = 10,
+) -> dict[str, Any]:
+    """Create a booking.
+
+    Race condition protection via unique constraint on (user_id, slot_id)
+    and slot-level check before insert.
+
+    Returns:
+        Dict with booking info or error.
+    """
+    # Verify slot exists and is active
+    result = await db_session.execute(
+        select(Slot).where(Slot.id == slot_id)
+    )
+    slot = result.scalar_one_or_none()
+
+    if not slot:
+        return {"success": False, "error": "Слот не найден."}
+
+    if not slot.is_active:
+        return {"success": False, "error": "Слот неактивен."}
+
+    # Check if already booked by this user
+    existing = await db_session.execute(
+        select(Booking).where(
+            Booking.slot_id == slot_id,
+            Booking.user_id == user_id,
+        )
+    )
+    if existing.scalar_one_or_none():
+        return {
+            "success": False,
+            "error": "Вы уже забронировали этот слот.",
+        }
+
+    # Check if slot is taken by someone else
+    other_bookings = await db_session.execute(
+        select(Booking).where(Booking.slot_id == slot_id)
+    )
+    if other_bookings.scalar_one_or_none():
+        return {
+            "success": False,
+            "error": "Этот слот уже занят.",
+        }
+
+    # Create booking
+    booking = Booking(
+        slot_id=slot_id,
+        user_id=user_id,
+        user_name=user_name,
+        comment=comment,
+        notify_minutes=notify_minutes,
+    )
+    db_session.add(booking)
+    await db_session.flush()
+
+    # Create notification record
+    slot_datetime = datetime.combine(slot.date, slot.start_time)
+    notify_at = slot_datetime - timedelta(minutes=notify_minutes)
+
+    notification = Notification(
+        booking_id=booking.id,
+        user_id=user_id,
+        notify_at=notify_at,
+        sent=False,
+    )
+    db_session.add(notification)
+    await db_session.flush()
+
+    # Audit log
+    log = AuditLog(
+        action="booking_created",
+        user_id=user_id,
+        slot_id=slot_id,
+        booking_id=booking.id,
+        details={"notify_minutes": notify_minutes},
+    )
+    db_session.add(log)
+
+    await db_session.commit()
+
+    return {
+        "success": True,
+        "booking_id": booking.id,
+        "slot_id": slot_id,
+        "date": str(slot.date),
+        "start_time": slot.start_time.strftime("%H:%M"),
+        "end_time": slot.end_time.strftime("%H:%M"),
+        "notify_at": notify_at.isoformat(),
+    }
+
+
+async def cancel_booking(
+    db_session: AsyncSession,
+    booking_id: int,
+    user_id: int,
+) -> dict[str, Any]:
+    """Cancel a booking by its ID.
+
+    Returns:
+        Dict with success status and info.
+    """
+    result = await db_session.execute(
+        select(Booking).where(Booking.id == booking_id)
+    )
+    booking = result.scalar_one_or_none()
+
+    if not booking:
+        return {"success": False, "error": "Бронь не найдена."}
+
+    if booking.user_id != user_id:
+        return {
+            "success": False,
+            "error": "Вы не можете отменить чужую бронь.",
+        }
+
+    slot_id = booking.slot_id
+
+    # Audit log
+    log = AuditLog(
+        action="booking_cancelled",
+        user_id=user_id,
+        slot_id=slot_id,
+        booking_id=booking_id,
+        details={"cause": "user"},
+    )
+    db_session.add(log)
+
+    # Delete booking (cascades to notifications)
+    await db_session.delete(booking)
+    await db_session.commit()
+
+    return {
+        "success": True,
+        "slot_id": slot_id,
+    }
+
+
+async def get_user_bookings(
+    db_session: AsyncSession, user_id: int
+) -> list[dict[str, Any]]:
+    """Get all bookings for a user with slot info."""
+    result = await db_session.execute(
+        select(Booking).where(Booking.user_id == user_id).order_by(Booking.created_at.desc())
+    )
+    bookings = result.scalars().all()
+
+    output = []
+    for booking in bookings:
+        slot = await db_session.get(Slot, booking.slot_id)
+        output.append({
+            "booking_id": booking.id,
+            "slot_id": booking.slot_id,
+            "date": str(slot.date) if slot else "N/A",
+            "start_time": slot.start_time.strftime("%H:%M") if slot else "N/A",
+            "end_time": slot.end_time.strftime("%H:%M") if slot else "N/A",
+            "comment": booking.comment,
+            "notify_minutes": booking.notify_minutes,
+            "created_at": booking.created_at.isoformat() if booking.created_at else "",
+        })
+
+    return output
