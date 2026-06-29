@@ -48,9 +48,8 @@ class SlidingWindowRateLimiter:
             True if request is allowed, False if rate limited.
         """
         await self._ensure_lock()
-        assert self._lock is not None
 
-        async with self._lock:
+        async with self._lock:  # type: ignore[union-attr]
             now = time.monotonic()
             if key not in self._windows:
                 self._windows[key] = deque()
@@ -70,9 +69,8 @@ class SlidingWindowRateLimiter:
     async def cleanup(self) -> None:
         """Remove stale entries (ids with empty windows older than 1 hour)."""
         await self._ensure_lock()
-        assert self._lock is not None
 
-        async with self._lock:
+        async with self._lock:  # type: ignore[union-attr]
             now = time.monotonic()
             stale_keys = [
                 key
