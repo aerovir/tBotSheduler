@@ -57,8 +57,7 @@ async def client(db_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
     maker = async_sessionmaker(
         db_engine, class_=AsyncSession, expire_on_commit=False
     )
-    async with maker() as session:
-        app.state.db_session = session
+    app.state.session_maker = maker
 
     import time
     app.state.started_at = time.monotonic()
@@ -72,6 +71,7 @@ async def client(db_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
     mock_application.bot = mock_bot
     mock_application.job_queue = MagicMock()
     mock_application.job_queue.jobs = MagicMock(return_value=[])
+    mock_application.bot_data = {"session_maker": maker}
     app.state.bot_app = mock_application
 
     async with AsyncClient(

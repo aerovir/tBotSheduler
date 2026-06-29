@@ -41,7 +41,7 @@ class HealthContext:
 
     engine: Any = None
     bot_app: Any = None
-    db_session: Any = None
+    session_maker: Any = None
     started_at: float = field(default_factory=time.monotonic)
 
 
@@ -52,7 +52,7 @@ def _extract_context(request_or_bot: Request | Any) -> HealthContext:
     if isinstance(request_or_bot, Request):
         ctx.engine = getattr(request_or_bot.app.state, "engine", None)
         ctx.bot_app = getattr(request_or_bot.app.state, "bot_app", None)
-        ctx.db_session = getattr(request_or_bot.app.state, "db_session", None)
+        ctx.session_maker = getattr(request_or_bot.app.state, "session_maker", None)
         ctx.started_at = getattr(
             request_or_bot.app.state, "started_at", time.monotonic()
         )
@@ -60,7 +60,7 @@ def _extract_context(request_or_bot: Request | Any) -> HealthContext:
         # Bot Application
         ctx.bot_app = request_or_bot
         ctx.engine = getattr(request_or_bot, "_health_engine", None)
-        ctx.db_session = getattr(request_or_bot, "_health_db_session", None)
+        ctx.session_maker = getattr(request_or_bot, "_health_session_maker", None)
         ctx.started_at = getattr(
             request_or_bot, "_start_time", time.monotonic()
         )
@@ -177,17 +177,18 @@ async def _check_memory() -> dict:
 async def _check_scheduler(ctx: HealthContext) -> dict:
     """Check heartbeat: pending notifications."""
     try:
-        db_session = ctx.db_session
-        if db_session is None:
-            return {"status": HealthStatus.DOWN, "detail": "db_session not initialized"}
+        maker = ctx.session_maker
+        if maker is None:
+            return {"status": HealthStatus.DOWN, "detail": "no session_maker available"}
 
-        result = await db_session.execute(
-            text(
-                "SELECT COUNT(*) FROM notification "
-                "WHERE sent = 0 AND notify_at <= datetime('now')"
+        async with maker() as session:
+            result = await session.execute(
+                text(
+                    "SELECT COUNT(*) FROM notification "
+                    "WHERE sent = 0 AND notify_at <= datetime('now')"
+                )
             )
-        )
-        count = result.scalar() or 0
+            count = result.scalar() or 0
 
         status = HealthStatus.OK if count == 0 else HealthStatus.DEGRADED
         detail = f"pending_notifications={count}"

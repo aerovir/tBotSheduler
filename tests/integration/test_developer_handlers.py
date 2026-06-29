@@ -53,16 +53,18 @@ class TestHealthCommand:
         return update
 
     @pytest.fixture
-    def mock_context(self, db_session):
+    def mock_context(self, db_engine):
         """Mock context with bot app."""
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+        maker = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
         context = MagicMock()
-        context.bot_data = {"db_session": db_session}
+        context.bot_data = {"session_maker": maker}
         mock_bot = MagicMock()
         mock_bot.send_message = AsyncMock()
         mock_app = MagicMock()
         mock_app.bot = mock_bot
         mock_app._health_engine = None
-        mock_app._health_db_session = db_session
+        mock_app._health_session_maker = None
         mock_app._start_time = 1000000.0
         mock_app.running = True
         mock_app.job_queue = MagicMock()
@@ -135,9 +137,11 @@ class TestVersionCommand:
         return update
 
     @pytest.fixture
-    def mock_context(self, db_session):
+    def mock_context(self, db_engine):
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+        maker = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
         context = MagicMock()
-        context.bot_data = {"db_session": db_session}
+        context.bot_data = {"session_maker": maker}
         mock_app = MagicMock()
         mock_app._start_time = 1000000.0
         context.application = mock_app

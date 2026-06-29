@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tbot_sheduler.models import Admin, AuditLog, Channel
 
@@ -30,10 +30,12 @@ class TestSetupCommand:
         return update
 
     @pytest.fixture
-    def mock_context(self, db_session):
-        """Create mock context with db_session."""
+    def mock_context(self, db_engine):
+        """Create mock context with session_maker."""
+        from sqlalchemy.ext.asyncio import AsyncSession
+        maker = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
         context = MagicMock()
-        context.bot_data = {"db_session": db_session}
+        context.bot_data = {"session_maker": maker}
         return context
 
     async def test_setup_creates_owner(self, mock_update, mock_context, db_session):
@@ -79,9 +81,11 @@ class TestModerationDirect:
     """Test moderation functions directly (without decorators)."""
 
     @pytest.fixture
-    def context(self, db_session):
+    def context(self, db_engine):
+        from sqlalchemy.ext.asyncio import AsyncSession
+        maker = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
         context = MagicMock()
-        context.bot_data = {"db_session": db_session}
+        context.bot_data = {"session_maker": maker}
         return context
 
     @pytest.fixture

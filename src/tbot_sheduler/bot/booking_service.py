@@ -203,51 +203,123 @@ async def change_booking(
     new_slot_id: int,
     user_id: int,
     notify_minutes: int = 10,
+    comment: str | None = None,
 ) -> dict[str, Any]:
     """Change a booking to a different slot.
 
-    Cancels old booking, creates new one in a single logical operation.
+    Вся операция в одной транзакции: delete + insert в рамках одного commit'а.
+    Если новый слот занят или произошла ошибка — всё откатывается,
+    старая бронь сохраняется.
 
     Returns:
         Dict with new booking info or error.
     """
-    # First cancel old booking
-    cancel_result = await cancel_booking(db_session, booking_id, user_id)
-    if not cancel_result["success"]:
-        return cancel_result
-
-    # Find the old booking's slot for audit
-    old_slot_id = cancel_result["slot_id"]
-
-    # Create new booking
-    create_result = await create_booking(
-        db_session=db_session,
-        slot_id=new_slot_id,
-        user_id=user_id,
-        user_name=None,
-        notify_minutes=notify_minutes,
+    # 1. Verify new slot exists, is active, and is free
+    slot_result = await db_session.execute(
+        select(Slot).where(Slot.id == new_slot_id)
     )
-    if not create_result["success"]:
-        return create_result
+    new_slot = slot_result.scalar_one_or_none()
+    if not new_slot:
+        return {"success": False, "error": "Новый слот не найден."}
+    if not new_slot.is_active:
+        return {"success": False, "error": "Новый слот неактивен."}
 
-    # Update audit log for the change
-    log = AuditLog(
-        action="booking_changed",
-        user_id=user_id,
-        slot_id=new_slot_id,
-        booking_id=create_result["booking_id"],
-        details={
-            "old_slot_id": old_slot_id,
-            "new_slot_id": new_slot_id,
-            "old_booking_id": booking_id,
-        },
+    # Check that new slot isn't booked by anyone else
+    existing = await db_session.execute(
+        select(Booking).where(Booking.slot_id == new_slot_id)
     )
-    db_session.add(log)
-    await db_session.commit()
+    if existing.scalar_one_or_none():
+        return {"success": False, "error": "Этот слот уже занят."}
 
-    create_result["old_booking_id"] = booking_id
-    create_result["old_slot_id"] = old_slot_id
-    return create_result
+    # 2. Find old booking
+    old_booking_result = await db_session.execute(
+        select(Booking).where(Booking.id == booking_id)
+    )
+    old_booking = old_booking_result.scalar_one_or_none()
+    if not old_booking:
+        return {"success": False, "error": "Бронь не найдена."}
+    if old_booking.user_id != user_id:
+        return {"success": False, "error": "Вы не можете изменить чужую бронь."}
+
+    old_slot_id = old_booking.slot_id
+    user_name = old_booking.user_name
+    # Preserve comment from old booking unless a new one is provided
+    effective_comment = comment if comment is not None else old_booking.comment
+
+    # 3. Atomically: delete old booking, create new booking, log audit
+    try:
+        # Delete old notification
+        notif_result = await db_session.execute(
+            select(Notification).where(Notification.booking_id == booking_id)
+        )
+        old_notification = notif_result.scalar_one_or_none()
+        if old_notification:
+            await db_session.delete(old_notification)
+
+        # Delete old booking
+        await db_session.delete(old_booking)
+
+        # Create new booking
+        new_booking = Booking(
+            slot_id=new_slot_id,
+            user_id=user_id,
+            user_name=user_name,
+            comment=effective_comment,
+            notify_minutes=notify_minutes,
+        )
+        db_session.add(new_booking)
+        await db_session.flush()
+
+        # Create new notification
+        slot_datetime = datetime.combine(new_slot.date, new_slot.start_time)
+        notify_at = slot_datetime - timedelta(minutes=notify_minutes)
+        notification = Notification(
+            booking_id=new_booking.id,
+            user_id=user_id,
+            notify_at=notify_at,
+            sent=False,
+        )
+        db_session.add(notification)
+        await db_session.flush()
+
+        # Audit log
+        log = AuditLog(
+            action="booking_changed",
+            user_id=user_id,
+            slot_id=new_slot_id,
+            booking_id=new_booking.id,
+            details={
+                "old_slot_id": old_slot_id,
+                "old_booking_id": booking_id,
+                "new_slot_id": new_slot_id,
+                "notify_minutes": notify_minutes,
+            },
+        )
+        db_session.add(log)
+
+        await db_session.commit()
+    except exc.IntegrityError:
+        await db_session.rollback()
+        logger.warning(
+            "change_booking: IntegrityError — new slot %d taken, old booking %d preserved",
+            new_slot_id, booking_id,
+        )
+        return {
+            "success": False,
+            "error": "Этот слот уже занят.",
+        }
+
+    return {
+        "success": True,
+        "booking_id": new_booking.id,
+        "slot_id": new_slot_id,
+        "old_booking_id": booking_id,
+        "old_slot_id": old_slot_id,
+        "date": str(new_slot.date),
+        "start_time": new_slot.start_time.strftime("%H:%M"),
+        "end_time": new_slot.end_time.strftime("%H:%M"),
+        "notify_at": notify_at.isoformat(),
+    }
 
 
 async def get_user_bookings(

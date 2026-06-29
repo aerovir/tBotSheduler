@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -18,6 +19,19 @@ _engine: AsyncEngine | None = None
 _async_session_maker: async_sessionmaker[AsyncSession] | None = None
 
 
+def _set_sqlite_pragmas(dbapi_connection, connection_record):
+    """Set SQLite PRAGMAs on every new connection.
+
+    Ensures foreign_keys=ON and busy_timeout=5000 apply to all sessions,
+    not just the initial connection.
+    """
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.close()
+
+
 async def get_engine() -> AsyncEngine:
     """Get or create the database engine with WAL mode and busy timeout."""
     global _engine
@@ -31,11 +45,14 @@ async def get_engine() -> AsyncEngine:
             },
         )
 
-        # Configure WAL mode and busy timeout on first connection
+        # Attach pragma listener to fire on every new connection
+        event.listen(_engine.sync_engine, "connect", _set_sqlite_pragmas)
+
+        # Ensure tables use WAL from the start
         async with _engine.connect() as conn:
             await conn.exec_driver_sql("PRAGMA journal_mode=WAL")
-            await conn.exec_driver_sql("PRAGMA busy_timeout=5000")
             await conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+            await conn.exec_driver_sql("PRAGMA busy_timeout=5000")
             await conn.commit()
 
     return _engine

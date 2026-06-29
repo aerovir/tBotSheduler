@@ -42,6 +42,7 @@ class ChangeRequest(BaseModel):
     booking_id: int
     new_slot_id: int
     notify_minutes: int = 10
+    comment: str | None = None
 
 
 def _verify_init_data(init_data: str, max_age_seconds: int = 86400) -> int:
@@ -219,7 +220,7 @@ async def change_book(
         )
 
     result = await change_booking(
-        db_session, body.booking_id, body.new_slot_id, user_id, body.notify_minutes,
+        db_session, body.booking_id, body.new_slot_id, user_id, body.notify_minutes, body.comment,
     )
 
     if not result["success"]:

@@ -6,7 +6,7 @@ from datetime import date, time
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tbot_sheduler.models import Admin, Channel, Slot, Booking, Notification, AuditLog
 
@@ -154,6 +154,43 @@ class TestBookingService:
         old_free = await create_booking(db_session, slots[0].id, user_id=65002)
         assert old_free["success"] is True
 
+    async def test_change_booking_atomicity(self, db_session: AsyncSession):
+        """Test atomicity: old booking preserved if new slot is taken."""
+        from tbot_sheduler.bot.booking_service import create_booking, change_booking
+
+        result = await db_session.execute(select(Slot))
+        slots = result.scalars().all()
+
+        # User 1 books slot[0]
+        r1 = await create_booking(db_session, slots[0].id, user_id=65001)
+        assert r1["success"] is True
+        bid = r1["booking_id"]
+
+        # User 2 books slot[1] — different slot
+        r2 = await create_booking(db_session, slots[1].id, user_id=65002)
+        assert r2["success"] is True
+
+        # User 1 tries to change to slot[1] — already taken by user 2
+        r3 = await change_booking(db_session, bid, slots[1].id, user_id=65001)
+        assert r3["success"] is False
+        assert "уже занят" in r3["error"]
+
+        # User 1's original booking on slot[0] should still exist
+        bookings = await db_session.execute(
+            select(Booking).where(Booking.user_id == 65001)
+        )
+        user1_bookings = bookings.scalars().all()
+        assert len(user1_bookings) == 1
+        assert user1_bookings[0].slot_id == slots[0].id
+
+        # User 2's booking on slot[1] should still exist
+        bookings2 = await db_session.execute(
+            select(Booking).where(Booking.user_id == 65002)
+        )
+        user2_bookings = bookings2.scalars().all()
+        assert len(user2_bookings) == 1
+        assert user2_bookings[0].slot_id == slots[1].id
+
 
 class TestBookingAPI:
     """Test booking API endpoints."""
@@ -165,7 +202,7 @@ class TestBookingAPI:
             "user": f'{{"id":{user_id},"first_name":"Test"}}',
             "auth_date": str(int(time.time())),
         }
-        secret = hmac.new(b"WebAppData", b"test:fake_token_12345", hashlib.sha256).digest()
+        secret = hmac.new(b"test:fake_token_12345", b"WebAppData", hashlib.sha256).digest()
         dcs = "\n".join(f"{k}={v}" for k, v in sorted(data.items()))
         data["hash"] = hmac.new(secret, dcs.encode(), hashlib.sha256).hexdigest()
         return urllib.parse.urlencode(data)
@@ -178,7 +215,8 @@ class TestBookingAPI:
         app.include_router(api_router)
         app.state.engine = db_engine
         app.state.started_at = time.monotonic()
-        app.state.db_session = db_session
+        maker = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+        app.state.session_maker = maker
         return app
 
     async def test_book_slot_api(self, db_session, db_engine):

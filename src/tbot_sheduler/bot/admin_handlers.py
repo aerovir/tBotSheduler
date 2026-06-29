@@ -116,14 +116,17 @@ async def add_moderator_command(
         )
         return
 
+    # Find the acting admin to set added_by
+    acting_admin = (
+        await db_session.execute(
+            select(Admin).where(Admin.user_id == user_id)
+        )
+    ).scalar_one_or_none()
+
     admin = Admin(
         user_id=target_user_id,
         role="moderator",
-        added_by=(
-            await db_session.execute(
-                select(Admin).where(Admin.user_id == user_id)
-            )
-        ).scalar_one_or_none().id if user_id else None,
+        added_by=acting_admin.id if acting_admin else None,
     )
     db_session.add(admin)
     await db_session.commit()
