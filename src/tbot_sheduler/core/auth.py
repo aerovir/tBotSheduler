@@ -28,6 +28,15 @@ _role_cache: dict[int, tuple[str | None, float]] = {}
 CACHE_TTL = 300  # 5 minutes
 
 
+def invalidate_role_cache(user_id: int) -> None:
+    """Remove a user's cached role so the next lookup hits the database.
+
+    Call this when a user's role changes (added/removed as moderator, developer).
+    """
+    _role_cache.pop(user_id, None)
+    logger.debug("Role cache invalidated for user %d", user_id)
+
+
 async def user_has_role(
     db_session: AsyncSession,
     user_id: int,

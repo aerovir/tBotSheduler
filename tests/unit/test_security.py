@@ -111,6 +111,29 @@ class TestUserHasRole:
         assert result is True
         assert _role_cache[3001][1] > time.monotonic() - 10
 
+    async def test_invalidate_role_cache_removes_entry(self, db_session: AsyncSession):
+        """Test invalidate_role_cache removes user from cache."""
+        from tbot_sheduler.core.auth import user_has_role, invalidate_role_cache, _role_cache
+
+        admin = Admin(user_id=4001, username="invalidate", role="moderator")
+        db_session.add(admin)
+        await db_session.commit()
+
+        # Populate cache
+        await user_has_role(db_session, 4001, "moderator")
+        assert 4001 in _role_cache
+
+        # Invalidate
+        invalidate_role_cache(4001)
+        assert 4001 not in _role_cache
+
+    async def test_invalidate_nonexistent_user_does_not_crash(self):
+        """Test invalidate_role_cache handles non-cached user gracefully."""
+        from tbot_sheduler.core.auth import invalidate_role_cache
+
+        # Should not raise
+        invalidate_role_cache(999999)
+
 
 class TestCheckAdminDecorator:
     """Test @check_admin decorator."""

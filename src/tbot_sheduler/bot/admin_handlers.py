@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from tbot_sheduler.core.auth import check_admin, check_role, user_has_role
+from tbot_sheduler.core.auth import check_admin, check_role, invalidate_role_cache, user_has_role
+from tbot_sheduler.core.deps import with_db
 from tbot_sheduler.models import Admin, AuditLog, Channel
 
 logger = logging.getLogger(__name__)
@@ -28,11 +29,12 @@ async def _log_action(
     logger.info("AuditLog: %s (user=%s, details=%s)", action, user_id, details)
 
 
+@with_db
 async def setup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /setup — bind bot to a channel, creator becomes owner."""
     user_id = update.effective_user.id
     username = update.effective_user.username or update.effective_user.full_name
-    db_session: AsyncSession = context.bot_data["db_session"]
+    db_session: AsyncSession = context.bot_data["db"]
 
     # Check if already admin
     if await user_has_role(db_session, user_id, ["owner", "moderator", "developer"]):
@@ -85,13 +87,14 @@ async def setup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
+@with_db
 @check_role("owner")
 async def add_moderator_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Handle /add_moderator <user_id> — owner adds a moderator."""
     user_id = update.effective_user.id
-    db_session: AsyncSession = context.bot_data["db_session"]
+    db_session: AsyncSession = context.bot_data["db"]
 
     if not context.args:
         await update.message.reply_text(
@@ -124,6 +127,7 @@ async def add_moderator_command(
     )
     db_session.add(admin)
     await db_session.commit()
+    invalidate_role_cache(target_user_id)
 
     await _log_action(
         db_session, "moderator_added",
@@ -136,13 +140,14 @@ async def add_moderator_command(
     )
 
 
+@with_db
 @check_role("owner")
 async def remove_moderator_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Handle /remove_moderator <user_id> — owner removes a moderator."""
     user_id = update.effective_user.id
-    db_session: AsyncSession = context.bot_data["db_session"]
+    db_session: AsyncSession = context.bot_data["db"]
 
     if not context.args:
         await update.message.reply_text(
@@ -174,6 +179,7 @@ async def remove_moderator_command(
 
     await db_session.delete(admin)
     await db_session.commit()
+    invalidate_role_cache(target_user_id)
 
     await _log_action(
         db_session, "moderator_removed",
@@ -186,12 +192,13 @@ async def remove_moderator_command(
     )
 
 
+@with_db
 @check_admin
 async def moderators_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Handle /moderators — list all moderators."""
-    db_session: AsyncSession = context.bot_data["db_session"]
+    db_session: AsyncSession = context.bot_data["db"]
 
     result = await db_session.execute(
         select(Admin).where(Admin.role == "moderator")
@@ -212,13 +219,14 @@ async def moderators_command(
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
+@with_db
 @check_role("owner")
 async def add_developer_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Handle /add_developer <user_id> — owner adds a developer."""
     user_id = update.effective_user.id
-    db_session: AsyncSession = context.bot_data["db_session"]
+    db_session: AsyncSession = context.bot_data["db"]
 
     if not context.args:
         await update.message.reply_text(
@@ -241,6 +249,7 @@ async def add_developer_command(
     admin = Admin(user_id=target_user_id, role="developer")
     db_session.add(admin)
     await db_session.commit()
+    invalidate_role_cache(target_user_id)
 
     await _log_action(
         db_session, "developer_added",
@@ -253,13 +262,14 @@ async def add_developer_command(
     )
 
 
+@with_db
 @check_role("owner")
 async def remove_developer_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Handle /remove_developer <user_id> — owner removes a developer."""
     user_id = update.effective_user.id
-    db_session: AsyncSession = context.bot_data["db_session"]
+    db_session: AsyncSession = context.bot_data["db"]
 
     if not context.args:
         await update.message.reply_text(
@@ -287,6 +297,7 @@ async def remove_developer_command(
 
     await db_session.delete(admin)
     await db_session.commit()
+    invalidate_role_cache(target_user_id)
 
     await _log_action(
         db_session, "developer_removed",
@@ -299,12 +310,13 @@ async def remove_developer_command(
     )
 
 
+@with_db
 @check_admin
 async def developers_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Handle /developers — list all developers."""
-    db_session: AsyncSession = context.bot_data["db_session"]
+    db_session: AsyncSession = context.bot_data["db"]
 
     result = await db_session.execute(
         select(Admin).where(Admin.role == "developer")
