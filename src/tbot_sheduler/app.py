@@ -64,13 +64,15 @@ def _signal_handler(sig: int, frame) -> None:
     _shutdown_event.set()
 
 
-async def _check_pending_on_startup(db_session: AsyncSession) -> None:
-    """Check for pending notifications on startup."""
+async def _check_pending_on_startup(
+    db_session: AsyncSession, bot
+) -> None:
+    """Check for pending notifications on startup and send them."""
     try:
-        count = await check_pending(db_session)
+        count = await check_pending(db_session, bot)
         if count > 0:
             logger.info(
-                "Startup heartbeat: found %d pending notifications, catching up...",
+                "Startup heartbeat: sent %d pending notifications",
                 count,
             )
         else:
@@ -172,14 +174,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     session_maker = await get_session_maker()
     app.state.session_maker = session_maker
 
-    # Create a session for startup checks
-    async with session_maker() as session:
-        app.state.db_session = session
-        await _check_pending_on_startup(session)
-
     # Bot
     bot_app = _create_bot_app()
     app.state.bot_app = bot_app
+
+    # Run startup checks with a short-lived session
+    async with session_maker() as startup_session:
+        await _check_pending_on_startup(startup_session, bot_app.bot)
 
     # Healthcheck on startup
     from tbot_sheduler.api.health import run_healthcheck
@@ -210,13 +211,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await bot_app.start()
     await bot_app.updater.start_polling()
 
-    # Set bot_data after initialization
-    bot_app.bot_data["db_session"] = app.state.db_session
+    # Set bot_data — store session_maker, NOT a single session
+    bot_app.bot_data["session_maker"] = session_maker
     bot_app.bot_data["engine"] = engine
 
-    # Store engine/db for bot healthcheck access
+    # Register recurring heartbeat: каждые 5 минут проверка просроченных уведомлений
+    try:
+        from tbot_sheduler.bot.notification_service import _heartbeat_callback
+        bot_app.job_queue.run_repeating(
+            _heartbeat_callback,
+            interval=300,  # 5 минут
+            first=60,      # первый запуск через 60 секунд после старта
+        )
+        logger.info("Heartbeat recurring job registered (every 300s)")
+    except Exception as e:
+        logger.warning("Could not register heartbeat job: %s", e)
+
+    # Store engine + maker for bot healthcheck access
     bot_app._health_engine = engine
-    bot_app._health_db_session = app.state.db_session
+    bot_app._health_session_maker = session_maker
     bot_app._start_time = started_at
 
     logger.info("Bot started polling")
@@ -228,6 +241,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await bot_app.updater.stop()
     await bot_app.stop()
     await bot_app.shutdown()
+
     await dispose_engine()
     logger.info("Shutdown complete")
 

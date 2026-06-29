@@ -154,3 +154,20 @@ async def check_pending_notifications(
         logger.debug("Heartbeat: no pending notifications")
 
     return sent_count
+
+
+async def _heartbeat_callback(context) -> None:
+    """JobQueue repeating callback: periodic heartbeat check.
+
+    Создаёт сессию из session_maker и отправляет просроченные уведомления.
+    Запускается каждые 5 минут через job_queue.run_repeating.
+    """
+    maker = context.bot_data.get("session_maker")
+    if not maker:
+        logger.warning("Heartbeat callback: no session_maker in bot_data")
+        return
+    try:
+        async with maker() as session:
+            await check_pending_notifications(session, context.bot)
+    except Exception as e:
+        logger.error("Heartbeat callback failed: %s", e)
