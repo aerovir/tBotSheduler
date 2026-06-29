@@ -159,7 +159,7 @@ class TestCheckAdminDecorator:
         wrapped = check_admin(mock_handler)
 
         # Need context.bot_data with db_session
-        mock_context.bot_data["db_session"] = db_session
+        mock_context.bot_data["db"] = db_session
 
         await wrapped(mock_update, mock_context)
         mock_handler.assert_awaited_once()
@@ -173,7 +173,7 @@ class TestCheckAdminDecorator:
         mock_update.effective_user.id = 99999
         mock_handler = AsyncMock()
         wrapped = check_admin(mock_handler)
-        mock_context.bot_data["db_session"] = db_session
+        mock_context.bot_data["db"] = db_session
 
         await wrapped(mock_update, mock_context)
         mock_handler.assert_not_awaited()
@@ -216,7 +216,7 @@ class TestCheckRoleDecorator:
 
         mock_handler = AsyncMock()
         wrapped = check_role("owner")(mock_handler)
-        mock_context.bot_data["db_session"] = db_session
+        mock_context.bot_data["db"] = db_session
 
         await wrapped(mock_update, mock_context)
         mock_handler.assert_awaited_once()
@@ -234,7 +234,7 @@ class TestCheckRoleDecorator:
 
         mock_handler = AsyncMock()
         wrapped = check_role("owner")(mock_handler)
-        mock_context.bot_data["db_session"] = db_session
+        mock_context.bot_data["db"] = db_session
 
         await wrapped(mock_update, mock_context)
         mock_handler.assert_not_awaited()
@@ -251,7 +251,7 @@ class TestCheckRoleDecorator:
 
         mock_handler = AsyncMock()
         wrapped = check_role("owner", "moderator")(mock_handler)
-        mock_context.bot_data["db_session"] = db_session
+        mock_context.bot_data["db"] = db_session
 
         await wrapped(mock_update, mock_context)
         mock_handler.assert_awaited_once()
@@ -269,7 +269,7 @@ class TestCheckRoleDecorator:
 
         mock_handler = AsyncMock()
         wrapped = check_role("owner", "moderator")(mock_handler)
-        mock_context.bot_data["db_session"] = db_session
+        mock_context.bot_data["db"] = db_session
 
         await wrapped(mock_update, mock_context)
         mock_handler.assert_not_awaited()
@@ -286,7 +286,77 @@ class TestCheckRoleDecorator:
 
         mock_handler = AsyncMock()
         wrapped = check_role("developer", "owner")(mock_handler)
-        mock_context.bot_data["db_session"] = db_session
+        mock_context.bot_data["db"] = db_session
 
         await wrapped(mock_update, mock_context)
         mock_handler.assert_awaited_once()
+
+
+class TestAuthDecoratorNoneChecks:
+    """Test that auth decorators handle None effective_user/message safely."""
+
+    @pytest.fixture
+    def mock_context(self):
+        context = MagicMock()
+        context.bot_data = {}
+        return context
+
+    async def test_admin_decorator_none_user(
+        self, mock_context
+    ):
+        """Test @check_admin with None effective_user doesn't crash."""
+        from tbot_sheduler.core.auth import check_admin
+
+        update = MagicMock()
+        update.effective_user = None
+
+        mock_handler = AsyncMock()
+        wrapped = check_admin(mock_handler)
+
+        await wrapped(update, mock_context)
+        # Handler should NOT be called
+        mock_handler.assert_not_awaited()
+
+    async def test_admin_decorator_none_message(
+        self, mock_context, db_session
+    ):
+        """Test @check_admin with None message but effective_chat doesn't crash."""
+        from tbot_sheduler.core.auth import check_admin
+
+        from telegram import Chat
+        effective_chat = MagicMock(spec=Chat)
+        effective_chat.id = -1001234567
+        effective_chat.send_message = AsyncMock()
+
+        update = MagicMock()
+        update.effective_user = MagicMock()
+        update.effective_user.id = 7001
+        update.effective_chat = effective_chat
+        update.message = None  # e.g. callback query
+
+        mock_context.bot_data["db"] = db_session
+
+        mock_handler = AsyncMock()
+        wrapped = check_admin(mock_handler)
+
+        await wrapped(update, mock_context)
+        # Handler should NOT be called (user is not admin)
+        mock_handler.assert_not_awaited()
+        # Error message should go through effective_chat
+        effective_chat.send_message.assert_awaited_once()
+
+    async def test_check_role_none_user(
+        self, mock_context
+    ):
+        """Test @check_role with None effective_user doesn't crash."""
+        from tbot_sheduler.core.auth import check_role
+
+        update = MagicMock()
+        update.effective_user = None
+
+        mock_handler = AsyncMock()
+        wrapped = check_role("owner")(mock_handler)
+
+        await wrapped(update, mock_context)
+        # Handler should NOT be called
+        mock_handler.assert_not_awaited()

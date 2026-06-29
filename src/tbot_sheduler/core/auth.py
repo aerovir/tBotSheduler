@@ -15,6 +15,14 @@ from tbot_sheduler.models import Admin
 
 logger = logging.getLogger(__name__)
 
+
+async def _reply(update: Update, text: str) -> None:
+    """Send a reply via message or chat, whichever is available."""
+    if update.message:
+        await update.message.reply_text(text)
+    elif update.effective_chat:
+        await update.effective_chat.send_message(text)
+
 # Cache: {user_id: (role, timestamp)}
 _role_cache: dict[int, tuple[str | None, float]] = {}
 CACHE_TTL = 300  # 5 minutes
@@ -76,23 +84,25 @@ def check_admin(
         *args: Any,
         **kwargs: Any,
     ) -> Any:
+        # Безопасная проверка: effective_user может быть None
+        # (channel post, poll, callback от анонимного админа)
+        if not update.effective_user:
+            logger.warning("check_admin: no effective_user in update")
+            return
+
         user_id = update.effective_user.id
-        db_session: AsyncSession | None = context.bot_data.get("db_session")
+        db_session: AsyncSession | None = context.bot_data.get("db")
 
         if db_session is None:
             logger.error("No db_session in context.bot_data")
-            await update.message.reply_text(
-                "⚠️ Техническая ошибка. Попробуйте позже."
-            )
+            await _reply(update, "⚠️ Техническая ошибка. Попробуйте позже.")
             return
 
         if await user_has_role(db_session, user_id, ["owner", "moderator", "developer"]):
             return await handler(update, context, *args, **kwargs)
 
         logger.warning("Access denied for user %d (not an admin)", user_id)
-        await update.message.reply_text(
-            "⛔ У вас нет прав для этой команды."
-        )
+        await _reply(update, "⛔ У вас нет прав для этой команды.")
 
     return wrapper
 
@@ -121,14 +131,17 @@ def check_role(*roles: str) -> Callable[[Callable[..., Any]], Callable[..., Any]
             *args: Any,
             **kwargs: Any,
         ) -> Any:
+            # Безопасная проверка: effective_user может быть None
+            if not update.effective_user:
+                logger.warning("check_role: no effective_user in update")
+                return
+
             user_id = update.effective_user.id
-            db_session: AsyncSession | None = context.bot_data.get("db_session")
+            db_session: AsyncSession | None = context.bot_data.get("db")
 
             if db_session is None:
                 logger.error("No db_session in context.bot_data")
-                await update.message.reply_text(
-                    "⚠️ Техническая ошибка. Попробуйте позже."
-                )
+                await _reply(update, "⚠️ Техническая ошибка. Попробуйте позже.")
                 return
 
             if await user_has_role(db_session, user_id, list(roles)):
@@ -139,9 +152,7 @@ def check_role(*roles: str) -> Callable[[Callable[..., Any]], Callable[..., Any]
                 user_id,
                 roles,
             )
-            await update.message.reply_text(
-                "⛔ У вас нет прав для этой команды."
-            )
+            await _reply(update, "⛔ У вас нет прав для этой команды.")
 
         return wrapper
 
