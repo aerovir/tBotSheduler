@@ -156,6 +156,28 @@ await _check_pending_on_startup(session)  # ← SELECT → autobegin → тра�
 - **#24** — APScheduler public API (schedule_removal) ✅
 - **#25** — datetime с timezone.utc ✅
 
+**P4-баги исправлены (2026-06-29):**
+- **#26** — datetime.utcnow → lambda: now(timezone.utc) во всех 7 моделях ✅
+- **#27** — Неиспользуемые импорты PicklePersistence, Base удалены ✅
+- **#28** — _shutdown_event мёртвый код удалён ✅
+- **#29** — logger.info() в signal handler удалён ✅
+- **#30** — get_event_loop() → get_running_loop() ✅
+- **#31** — _on_error использует logger.exception() ✅
+- **#32** — Проверка bot_app.updater is None ✅
+- **#33** — AuditLog: ForeignKey на slot.id и booking.id ✅
+- **#34** — Slot: relationships channel и created_by_admin ✅
+- **#35** — Channel: relationships owner и slots ✅
+- **#16** — N+1 в get_user_bookings (selectinload) ✅
+- **#17** — N+1 в get_available_slots (selectinload) ✅
+- **#18** — change_booking теряет comment ✅ (вместе с #9)
+- **#19** — free_slot уведомляет ожидающих ✅
+- **#20** — join_waiting проверяет занятость слота ✅
+- **#21** — Очистка очереди только успешных ✅
+- **#22** — forgotten_service подключён к heartbeat ✅
+- **#23** — export_service защищён (unique constraint) ✅
+- **#24** — APScheduler public API (schedule_removal) ✅
+- **#25** — datetime с timezone.utc ✅
+
 ---
 
 *BUG_ISSUE.md создан 2026-06-29 по результатам тестирования P0-фиксов*

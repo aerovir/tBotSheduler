@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import Integer, String, Date, Time, Boolean, ForeignKey, DateTime, UniqueConstraint
@@ -9,7 +9,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from tbot_sheduler.core.database import Base
 
 if TYPE_CHECKING:
+    from tbot_sheduler.models.admin import Admin
     from tbot_sheduler.models.booking import Booking
+    from tbot_sheduler.models.channel import Channel
 
 
 class Slot(Base):
@@ -27,10 +29,14 @@ class Slot(Base):
         Integer, ForeignKey("admin.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.utcnow
+        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
     )
 
     # Relationships
+    channel: Mapped["Channel"] = relationship("Channel", back_populates="slots")
+    created_by_admin: Mapped[Optional["Admin"]] = relationship(
+        "Admin", backref="created_slots"
+    )
     bookings: Mapped[list["Booking"]] = relationship(
         "Booking", back_populates="slot", cascade="all, delete-orphan"
     )

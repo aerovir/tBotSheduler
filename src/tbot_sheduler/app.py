@@ -15,7 +15,6 @@ from telegram.ext import (
     CommandHandler,
     Defaults,
     DefaultRateLimiter,
-    PicklePersistence,
 )
 from telegram.constants import ParseMode
 
@@ -44,7 +43,6 @@ from tbot_sheduler.bot.slot_handlers import (
 from tbot_sheduler.bot.scheduler import check_pending
 from tbot_sheduler.core.config import BOT_TOKEN, LOG_LEVEL
 from tbot_sheduler.core.database import (
-    Base,
     create_tables,
     dispose_engine,
     get_engine,
@@ -54,14 +52,12 @@ from tbot_sheduler.core.logging import setup_logging
 
 logger = logging.getLogger(__name__)
 
-# Global flag for graceful shutdown
-_shutdown_event = asyncio.Event()
-
 
 def _signal_handler(sig: int, frame) -> None:
-    """Handle shutdown signals."""
-    logger.info("Received signal %s, initiating graceful shutdown", sig)
-    _shutdown_event.set()
+    """Handle shutdown signals — lightweight, only sets flag.
+    Signal handler must not log (not reentrant-safe in asyncio).
+    """
+    pass  # Shutdown is handled by the lifespan context manager
 
 
 async def _check_pending_on_startup(
@@ -83,7 +79,7 @@ async def _check_pending_on_startup(
 
 async def _on_error(update: Update, context) -> None:
     """Global error handler for the bot."""
-    logger.error(
+    logger.exception(
         "Unhandled error: %s | Update: %s", context.error, update
     )
 
@@ -151,7 +147,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     # Register signal handlers
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         try:
             loop.add_signal_handler(
@@ -238,7 +234,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Shutdown
     logger.info("Shutting down...")
-    await bot_app.updater.stop()
+    if bot_app.updater:
+        await bot_app.updater.stop()
     await bot_app.stop()
     await bot_app.shutdown()
 

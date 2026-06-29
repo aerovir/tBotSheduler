@@ -1,7 +1,7 @@
 """Waiting queue model for busy slots."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import Integer, String, ForeignKey, DateTime, UniqueConstraint
@@ -22,7 +22,7 @@ class WaitingEntry(Base):
     user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     user_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.utcnow
+        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
     )
 
     __table_args__ = (

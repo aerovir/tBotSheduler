@@ -4,7 +4,7 @@
 > **Дата анализа:** 2026-06-29  
 > **Ветка:** `dev`  
 > **Версия:** 0.1.0  
-> **Всего ошибок:** 35 (🔴 0 · 🟠 0 · 🟡 0 · 🔵 10 · ✅ 25)
+> **Всего ошибок:** 35 (🔴 0 · 🟠 0 · 🟡 0 · 🔵 0 · ✅ 35)
 
 ---
 
@@ -260,16 +260,16 @@
 
 | # | Файл | Строки | Ошибка | Исправление |
 |---|------|--------|--------|-------------|
-| 26 | Все `models/*.py` | — | `datetime.utcnow` deprecated в 3.12+ | `datetime.now(datetime.UTC)` |
-| 27 | `app.py:18, 47` | 18, 47 | Неиспользуемые импорты `PicklePersistence`, `Base` | Удалить |
-| 28 | `app.py:58, 61-64` | 58, 61-64 | `_shutdown_event` — мёртвый код, никто не await'ит | Удалить или реализовать graceful shutdown |
-| 29 | `app.py:63` | 63 | `logger.info()` в signal handler (небезопасно) | Только `_shutdown_event.set()` |
-| 30 | `app.py:152` | 152 | `asyncio.get_event_loop()` deprecated | `asyncio.get_running_loop()` |
-| 31 | `app.py:82` | 82 | `_on_error` теряет stacktrace | `logger.exception(...)` |
-| 32 | `app.py:228` | 228 | Нет проверки `bot_app.updater is None` | `if bot_app.updater: await bot_app.updater.stop()` |
-| 33 | `models/audit_log.py` | 18-19 | `slot_id`, `booking_id` без ForeignKey | Добавить `ForeignKey("slot.id")`, `ForeignKey("booking.id")` |
-| 34 | `models/slot.py` | 19-28 | Нет relationships `channel` и `created_by_admin` | Добавить `relationship("Channel", back_populates="slots")` и аналогично |
-| 35 | `models/channel.py` | 18-19 | Нет relationships вообще | Добавить `owner`, `slots` relationships |
+| 26 | Все `models/*.py` | — | ~~`datetime.utcnow` deprecated в 3.12+~~ | ✅ `lambda: datetime.now(timezone.utc).replace(tzinfo=None)` во всех 7 моделях |
+| 27 | `app.py:18, 47` | 18, 47 | ~~Неиспользуемые импорты `PicklePersistence`, `Base`~~ | ✅ Удалены |
+| 28 | `app.py:58, 61-64` | 58, 61-64 | ~~`_shutdown_event` — мёртвый код~~ | ✅ Удалён, signal handler — pass |
+| 29 | `app.py:63` | 63 | ~~`logger.info()` в signal handler~~ | ✅ Удалён (небезопасно в сигналах) |
+| 30 | `app.py:152` | 152 | ~~`asyncio.get_event_loop()` deprecated~~ | ✅ `asyncio.get_running_loop()` |
+| 31 | `app.py:82` | 82 | ~~`_on_error` теряет stacktrace~~ | ✅ `logger.exception(...)` |
+| 32 | `app.py:228` | 228 | ~~Нет проверки `bot_app.updater is None`~~ | ✅ `if bot_app.updater:` |
+| 33 | `models/audit_log.py` | 18-19 | ~~`slot_id`, `booking_id` без ForeignKey~~ | ✅ `ForeignKey("slot.id")`, `ForeignKey("booking.id")` |
+| 34 | `models/slot.py` | 19-28 | ~~Нет relationships `channel` и `created_by_admin`~~ | ✅ Добавлены |
+| 35 | `models/channel.py` | 18-19 | ~~Нет relationships вообще~~ | ✅ Добавлены `owner`, `slots` |
 
 ---
 
@@ -302,7 +302,7 @@
 | **P1** | #5, #6, #7, #8, #10, #11, #13, #14, #15 | Потеря данных, падение бота, молчаливые сбои | ✅ Все исправлены |
 | **P2** | #9, #12 | Потеря брони, AttributeError | ✅ Исправлены |
 | **P3** | #16–#25 | Утечки, N+1, deprecated API | ✅ Все исправлены |
-| **P4** | #26–#35 | Косметика, мёртвый код, нейминг | 🔵 |
+| **P4** | #26–#35 | Косметика, мёртвый код, нейминг | ✅ Все исправлены |
 
 ---
 

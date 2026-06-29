@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import Integer, String, ForeignKey, DateTime
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from tbot_sheduler.core.database import Base
+
+if TYPE_CHECKING:
+    from tbot_sheduler.models.admin import Admin
+    from tbot_sheduler.models.slot import Slot
 
 
 class Channel(Base):
@@ -25,8 +29,12 @@ class Channel(Base):
         Integer, nullable=False, default=10
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.utcnow
+        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
     )
+
+    # Relationships
+    owner: Mapped["Admin"] = relationship("Admin", backref="channels")
+    slots: Mapped[list["Slot"]] = relationship("Slot", back_populates="channel", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return f"<Channel(id={self.id}, chat_id={self.chat_id}, title={self.title})>"

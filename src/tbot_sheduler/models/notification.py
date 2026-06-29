@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import Integer, String, Boolean, ForeignKey, DateTime, Index
@@ -24,7 +24,7 @@ class Notification(Base):
     sent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     job_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.utcnow
+        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
     )
 
     # Relationships
