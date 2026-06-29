@@ -5,8 +5,9 @@ import json
 import logging
 from datetime import date
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from tbot_sheduler.bot.booking_service import (
     create_booking,
@@ -16,6 +17,7 @@ from tbot_sheduler.bot.booking_service import (
     get_user_bookings,
 )
 from tbot_sheduler.core.config import BOT_TOKEN
+from tbot_sheduler.core.deps import get_db
 from tbot_sheduler.core.security import anti_flood, validate_init_data
 
 logger = logging.getLogger(__name__)
@@ -42,11 +44,22 @@ class ChangeRequest(BaseModel):
     notify_minutes: int = 10
 
 
-def _verify_init_data(init_data: str) -> int:
-    """Verify initData and return user_id."""
-    parsed = validate_init_data(init_data, BOT_TOKEN)
+def _verify_init_data(init_data: str, max_age_seconds: int = 86400) -> int:
+    """Verify initData and return user_id.
+
+    Args:
+        init_data: Raw initData string from Telegram.WebApp.initData
+        max_age_seconds: Maximum age of auth_date (300 for writes, 86400 for reads)
+
+    Returns:
+        Telegram user_id from the verified initData
+
+    Raises:
+        HTTPException(403): If initData is invalid or expired
+    """
+    parsed = validate_init_data(init_data, BOT_TOKEN, max_age_seconds=max_age_seconds)
     if not parsed:
-        raise HTTPException(status_code=403, detail="Invalid initData")
+        raise HTTPException(status_code=403, detail="Invalid or expired initData")
 
     try:
         user_data = json.loads(parsed.get("user", "{}"))
@@ -60,9 +73,9 @@ def _verify_init_data(init_data: str) -> int:
     return user_id
 
 
-def _get_user_name(init_data: str) -> str | None:
+def _get_user_name(init_data: str, max_age_seconds: int = 86400) -> str | None:
     """Extract user name from initData."""
-    parsed = validate_init_data(init_data, BOT_TOKEN)
+    parsed = validate_init_data(init_data, BOT_TOKEN, max_age_seconds=max_age_seconds)
     if not parsed:
         return None
     try:
@@ -77,7 +90,8 @@ def _get_user_name(init_data: str) -> str | None:
 
 @router.get("/book/slots")
 async def list_slots(
-    request: Request, channel_id: int, date_str: str
+    request: Request, channel_id: int, date_str: str,
+    db_session: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     """Get available slots for a channel and date."""
     init_data = request.headers.get("X-Init-Data", "")
@@ -88,15 +102,17 @@ async def list_slots(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date format")
 
-    db_session = request.app.state.db_session
     return await get_available_slots(db_session, channel_id, target_date)
 
 
 @router.post("/book")
-async def book_slot(request: Request, body: BookingRequest) -> dict:
+async def book_slot(
+    request: Request, body: BookingRequest,
+    db_session: AsyncSession = Depends(get_db),
+) -> dict:
     """Book a slot."""
     init_data = request.headers.get("X-Init-Data", "")
-    user_id = _verify_init_data(init_data)
+    user_id = _verify_init_data(init_data, max_age_seconds=300)
 
     if not anti_flood.check(user_id):
         raise HTTPException(
@@ -104,8 +120,7 @@ async def book_slot(request: Request, body: BookingRequest) -> dict:
             detail="Слишком часто. Попробуйте через 5 секунд.",
         )
 
-    db_session = request.app.state.db_session
-    user_name = _get_user_name(init_data)
+    user_name = _get_user_name(init_data, max_age_seconds=300)
 
     result = await create_booking(
         db_session=db_session,
@@ -142,20 +157,25 @@ async def book_slot(request: Request, body: BookingRequest) -> dict:
 
 
 @router.get("/my-bookings")
-async def my_bookings(request: Request) -> list[dict]:
+async def my_bookings(
+    request: Request,
+    db_session: AsyncSession = Depends(get_db),
+) -> list[dict]:
     """Get current user's bookings."""
     init_data = request.headers.get("X-Init-Data", "")
     user_id = _verify_init_data(init_data)
 
-    db_session = request.app.state.db_session
     return await get_user_bookings(db_session, user_id)
 
 
 @router.post("/cancel")
-async def cancel_book(request: Request, body: CancelRequest) -> dict:
+async def cancel_book(
+    request: Request, body: CancelRequest,
+    db_session: AsyncSession = Depends(get_db),
+) -> dict:
     """Cancel a booking."""
     init_data = request.headers.get("X-Init-Data", "")
-    user_id = _verify_init_data(init_data)
+    user_id = _verify_init_data(init_data, max_age_seconds=300)
 
     if not anti_flood.check(user_id):
         raise HTTPException(
@@ -163,7 +183,6 @@ async def cancel_book(request: Request, body: CancelRequest) -> dict:
             detail="Слишком часто. Попробуйте через 5 секунд.",
         )
 
-    db_session = request.app.state.db_session
     result = await cancel_booking(db_session, body.booking_id, user_id)
 
     if not result["success"]:
@@ -184,10 +203,13 @@ async def cancel_book(request: Request, body: CancelRequest) -> dict:
 
 
 @router.post("/change")
-async def change_book(request: Request, body: ChangeRequest) -> dict:
+async def change_book(
+    request: Request, body: ChangeRequest,
+    db_session: AsyncSession = Depends(get_db),
+) -> dict:
     """Change a booking to a different slot."""
     init_data = request.headers.get("X-Init-Data", "")
-    user_id = _verify_init_data(init_data)
+    user_id = _verify_init_data(init_data, max_age_seconds=300)
 
     if not anti_flood.check(user_id):
         raise HTTPException(
@@ -195,7 +217,6 @@ async def change_book(request: Request, body: ChangeRequest) -> dict:
             detail="Слишком часто. Попробуйте через 5 секунд.",
         )
 
-    db_session = request.app.state.db_session
     result = await change_booking(
         db_session, body.booking_id, body.new_slot_id, user_id, body.notify_minutes,
     )

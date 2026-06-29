@@ -11,15 +11,25 @@ from collections import deque
 logger = logging.getLogger(__name__)
 
 
-def validate_init_data(init_data: str, bot_token: str) -> dict | None:
+def validate_init_data(
+    init_data: str,
+    bot_token: str,
+    max_age_seconds: int = 86400,
+) -> dict | None:
     """Validate Telegram Web App initData using HMAC-SHA256.
+
+    Проверяет HMAC-подпись и срок действия auth_date.
+    Telegram рекомендует отклонять initData старше 24 часов (86400 сек)
+    или 5 минут (300 сек) для операций записи.
 
     Args:
         init_data: Raw initData string from Telegram.WebApp.initData
         bot_token: Bot token used to compute the secret key
+        max_age_seconds: Maximum age of auth_date in seconds.
+                         Default 86400 (24h). Use 300 for write operations.
 
     Returns:
-        Parsed initData dict if valid, None if tampered.
+        Parsed initData dict if valid, None if tampered or expired.
     """
     if not init_data or not bot_token:
         return None
@@ -30,9 +40,10 @@ def validate_init_data(init_data: str, bot_token: str) -> dict | None:
     if not hash_received:
         return None
 
-    # Compute secret key: HMAC-SHA256(WebAppData, bot_token)
+    # Compute secret key: HMAC-SHA256(bot_token, "WebAppData")
+    # Per Telegram spec: key=bot_token, message="WebAppData"
     secret_key = hmac.new(
-        b"WebAppData", bot_token.encode(), hashlib.sha256
+        bot_token.encode(), b"WebAppData", hashlib.sha256
     ).digest()
 
     # Build data check string: sorted key=value lines
@@ -45,10 +56,37 @@ def validate_init_data(init_data: str, bot_token: str) -> dict | None:
         secret_key, data_check_string.encode(), hashlib.sha256
     ).hexdigest()
 
-    if hmac.compare_digest(expected_hash, hash_received):
-        return parsed
+    if not hmac.compare_digest(expected_hash, hash_received):
+        return None
 
-    return None
+    # Проверка auth_date — защита от replay-атак
+    auth_date_str = parsed.get("auth_date")
+    if not auth_date_str:
+        logger.warning("validate_init_data: missing auth_date")
+        return None
+
+    try:
+        auth_date_ts = int(auth_date_str)
+    except (ValueError, TypeError):
+        logger.warning("validate_init_data: invalid auth_date: %s", auth_date_str)
+        return None
+
+    now = time.time()
+    if auth_date_ts < now - max_age_seconds:
+        logger.warning(
+            "validate_init_data: expired auth_date (%d < %d)",
+            auth_date_ts, now - max_age_seconds,
+        )
+        return None
+
+    if auth_date_ts > now + 300:  # 5 min clock skew tolerance
+        logger.warning(
+            "validate_init_data: future auth_date (%d > %d)",
+            auth_date_ts, now + 300,
+        )
+        return None
+
+    return parsed
 
 
 class AntiFlood:
