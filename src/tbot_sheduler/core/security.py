@@ -98,9 +98,12 @@ class AntiFlood:
     def __init__(self, cooldown_seconds: int = 5) -> None:
         self._cooldown = cooldown_seconds
         self._last_action: dict[int, float] = {}
+        self._check_count = 0
 
     def check(self, user_id: int) -> bool:
         """Check if user can perform an action.
+
+        Автоматически очищает устаревшие записи каждые 1000 проверок.
 
         Returns True if allowed, False if within cooldown.
         """
@@ -110,11 +113,19 @@ class AntiFlood:
             logger.warning("Anti-flood triggered for user %d", user_id)
             return False
         self._last_action[user_id] = now
+
+        # Periodic cleanup: every 1000th check remove stale entries
+        self._check_count += 1
+        if self._check_count >= 1000:
+            self._check_count = 0
+            self._cleanup(now)
+
         return True
 
-    def cleanup(self) -> None:
+    def _cleanup(self, now: float | None = None) -> None:
         """Remove stale entries older than 1 hour."""
-        now = time.monotonic()
+        if now is None:
+            now = time.monotonic()
         stale = [
             uid
             for uid, ts in self._last_action.items()
@@ -122,6 +133,12 @@ class AntiFlood:
         ]
         for uid in stale:
             del self._last_action[uid]
+        if stale:
+            logger.debug("AntiFlood cleanup: removed %d stale entries", len(stale))
+
+    def cleanup(self) -> None:
+        """Public cleanup method — maintained for external callers."""
+        self._cleanup()
 
 
 # Global anti-flood instance
