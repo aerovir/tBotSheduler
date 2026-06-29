@@ -9,10 +9,12 @@ from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import Update
 from telegram.ext import ContextTypes
+from telegram.error import Forbidden as TelegramForbidden
 
 from tbot_sheduler.api.health import EMOJI_MAP, HealthStatus, run_healthcheck
 from tbot_sheduler.core.auth import check_admin, check_role
 from tbot_sheduler.core.config import BOT_VERSION
+from tbot_sheduler.core.deps import with_db
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +69,7 @@ def format_health_message(health_data: dict) -> str:
     return "\n".join(lines)
 
 
+@with_db
 @check_role("developer", "owner")
 async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /health — send formatted healthcheck."""
@@ -78,18 +81,28 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # Send to PM if command is from group/channel
     if update.effective_chat.type != "private":
-        await update.message.reply_text(
-            "📋 Результат отправлен в личные сообщения."
-        )
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=message,
-            parse_mode="HTML",
-        )
+        try:
+            await update.message.reply_text(
+                "📋 Результат отправлен в личные сообщения."
+            )
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=message,
+                parse_mode="HTML",
+            )
+        except TelegramForbidden:
+            # User hasn't started a dialog with the bot — show in group
+            await update.message.reply_text(
+                "📋 Не могу отправить в личные сообщения.\n"
+                "Напишите боту в личку /start, чтобы разрешить.\n\n"
+                "Результат показываю здесь:",
+            )
+            await update.message.reply_text(message, parse_mode="HTML")
     else:
         await update.message.reply_text(message, parse_mode="HTML")
 
 
+@with_db
 @check_role("developer", "owner")
 async def logs_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /logs <lines> — show last N lines of log."""
@@ -131,6 +144,7 @@ async def logs_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("⚠️ Ошибка при чтении лог-файла.")
 
 
+@with_db
 @check_role("developer", "owner")
 async def version_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
