@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import exc, select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from tbot_sheduler.models import Booking, Slot, AuditLog, Notification
 
@@ -18,11 +19,14 @@ async def get_available_slots(
 ) -> list[dict[str, Any]]:
     """Get available (unbooked) slots for a given channel and date."""
     result = await db_session.execute(
-        select(Slot).where(
+        select(Slot)
+        .where(
             Slot.channel_id == channel_id,
             Slot.date == target_date,
             Slot.is_active == True,
-        ).order_by(Slot.start_time)
+        )
+        .options(selectinload(Slot.bookings))
+        .order_by(Slot.start_time)
     )
     slots = result.scalars().all()
 
@@ -96,7 +100,7 @@ async def create_booking(
         await db_session.flush()
 
         # Create notification record
-        slot_datetime = datetime.combine(slot.date, slot.start_time)
+        slot_datetime = datetime.combine(slot.date, slot.start_time, tzinfo=timezone.utc)
         notify_at = slot_datetime - timedelta(minutes=notify_minutes)
 
         notification = Notification(
@@ -271,7 +275,7 @@ async def change_booking(
         await db_session.flush()
 
         # Create new notification
-        slot_datetime = datetime.combine(new_slot.date, new_slot.start_time)
+        slot_datetime = datetime.combine(new_slot.date, new_slot.start_time, tzinfo=timezone.utc)
         notify_at = slot_datetime - timedelta(minutes=notify_minutes)
         notification = Notification(
             booking_id=new_booking.id,
@@ -327,13 +331,16 @@ async def get_user_bookings(
 ) -> list[dict[str, Any]]:
     """Get all bookings for a user with slot info."""
     result = await db_session.execute(
-        select(Booking).where(Booking.user_id == user_id).order_by(Booking.created_at.desc())
+        select(Booking)
+        .where(Booking.user_id == user_id)
+        .options(selectinload(Booking.slot))
+        .order_by(Booking.created_at.desc())
     )
     bookings = result.scalars().all()
 
     output = []
     for booking in bookings:
-        slot = await db_session.get(Slot, booking.slot_id)
+        slot = booking.slot  # eager-loaded via selectinload
         output.append({
             "booking_id": booking.id,
             "slot_id": booking.slot_id,

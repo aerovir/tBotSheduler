@@ -190,14 +190,17 @@ async def cancel_book(
     if not result["success"]:
         raise HTTPException(status_code=404, detail=result["error"])
 
-    # Remove JobQueue task if exists
+    # Remove JobQueue task if exists (use public API — iterate jobs)
     removed_job_id = result.get("removed_job_id")
     if removed_job_id:
         try:
             bot_app = getattr(request.app.state, 'bot_app', None)
             if bot_app and bot_app.job_queue:
-                bot_app.job_queue.scheduler.remove_job(removed_job_id)
-                logger.info("Removed JobQueue task %s for cancelled booking", removed_job_id)
+                for job in bot_app.job_queue.jobs():
+                    if job.name == removed_job_id:
+                        job.schedule_removal()
+                        logger.info("Removed JobQueue task %s for cancelled booking", removed_job_id)
+                        break
         except Exception as e:
             logger.warning("Could not remove JobQueue task %s: %s", removed_job_id, e)
 

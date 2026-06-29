@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tbot_sheduler.models import Admin, Channel, Slot, WaitingEntry
+from tbot_sheduler.models import Admin, Booking, Channel, Slot, WaitingEntry
 
 
 class TestWaitingQueueService:
@@ -25,6 +25,10 @@ class TestWaitingQueueService:
             start_time=time(10, 0), end_time=time(11, 0),
         )
         db_session.add(slot)
+        await db_session.flush()
+        # Create a booking so slot appears busy
+        booking = Booking(slot_id=slot.id, user_id=9999, user_name="Occupant")
+        db_session.add(booking)
         await db_session.commit()
         return slot.id, channel.id
 

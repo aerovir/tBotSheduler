@@ -7,7 +7,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import Bot
 
-from tbot_sheduler.models import Slot, WaitingEntry
+from tbot_sheduler.models import Booking, Slot, WaitingEntry
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +17,8 @@ async def join_waiting(
 ) -> dict:
     """Join waiting list for a busy slot.
 
+    Проверяет, что слот существует и занят (есть активная бронь).
+
     Returns:
         Dict with success status.
     """
@@ -25,6 +27,13 @@ async def join_waiting(
     slot = result.scalar_one_or_none()
     if not slot:
         return {"success": False, "error": "Слот не найден."}
+
+    # Check slot is actually busy (has a booking)
+    booking_result = await db_session.execute(
+        select(Booking).where(Booking.slot_id == slot_id)
+    )
+    if not booking_result.scalar_one_or_none():
+        return {"success": False, "error": "Слот свободен, можете забронировать сразу."}
 
     # Check if already in waiting list
     existing = await db_session.execute(
@@ -77,6 +86,7 @@ async def notify_waiting_users(
         return 0
 
     count = 0
+    notified_ids: list[int] = []
     for entry in entries:
         try:
             await bot.send_message(
@@ -89,20 +99,29 @@ async def notify_waiting_users(
                 parse_mode="HTML",
             )
             count += 1
+            notified_ids.append(entry.id)
         except Exception as e:
             logger.error(
                 "Failed to notify user %d about free slot %d: %s",
                 entry.user_id, slot_id, e,
             )
 
-    # Clear waiting list
-    await db_session.execute(
-        delete(WaitingEntry).where(WaitingEntry.slot_id == slot_id)
-    )
-    await db_session.commit()
-
-    logger.info(
-        "Notified %d/%d waiting users about slot %d",
-        count, len(entries), slot_id,
-    )
+    # Clear only successfully notified users
+    if notified_ids:
+        await db_session.execute(
+            delete(WaitingEntry).where(
+                WaitingEntry.slot_id == slot_id,
+                WaitingEntry.id.in_(notified_ids),
+            )
+        )
+        await db_session.commit()
+        logger.info(
+            "Notified %d/%d waiting users about slot %d, removed %d from queue",
+            count, len(entries), slot_id, len(notified_ids),
+        )
+    else:
+        logger.warning(
+            "Failed to notify any of %d waiting users for slot %d, queue preserved",
+            len(entries), slot_id,
+        )
     return count

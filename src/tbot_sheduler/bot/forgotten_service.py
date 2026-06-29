@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +24,7 @@ async def check_inactive_bookings(
     Returns:
         Dict with counts of checked, warned, cancelled bookings.
     """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     inactive_cutoff = now - timedelta(hours=24)
 
     # Find bookings where:

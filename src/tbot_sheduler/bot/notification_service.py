@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import text, select
@@ -42,7 +42,10 @@ async def schedule_notification(
         logger.warning("JobQueue not available, notification will use heartbeat")
         return None
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
+    # Ensure notify_at is timezone-aware (treat naive as UTC)
+    if notify_at.tzinfo is None:
+        notify_at = notify_at.replace(tzinfo=timezone.utc)
     delay = max(0, (notify_at - now).total_seconds())
 
     job = job_queue.run_once(
@@ -180,14 +183,30 @@ async def _heartbeat_callback(context) -> None:
     """JobQueue repeating callback: periodic heartbeat check.
 
     Создаёт сессию из session_maker и отправляет просроченные уведомления.
+    Также проверяет забытые брони (inactive > 24h).
     Запускается каждые 5 минут через job_queue.run_repeating.
     """
     maker = context.bot_data.get("session_maker")
     if not maker:
         logger.warning("Heartbeat callback: no session_maker in bot_data")
         return
+
+    # 1. Send pending notifications
     try:
         async with maker() as session:
             await check_pending_notifications(session, context.bot)
     except Exception as e:
-        logger.error("Heartbeat callback failed: %s", e)
+        logger.error("Heartbeat (notifications) failed: %s", e)
+
+    # 2. Check forgotten bookings
+    try:
+        async with maker() as session:
+            from tbot_sheduler.bot.forgotten_service import check_inactive_bookings
+            result = await check_inactive_bookings(session, context.bot)
+            if result.get("warned") or result.get("cancelled"):
+                logger.info(
+                    "Forgotten check: warned=%d, cancelled=%d",
+                    result["warned"], result["cancelled"],
+                )
+    except Exception as e:
+        logger.error("Heartbeat (forgotten) failed: %s", e)

@@ -208,10 +208,16 @@ async def free_slot_command(
         },
     )
 
-    await update.message.reply_text(
-        f"✅ Слот #{slot_id} ({slot.date} {slot.start_time}–{slot.end_time}) "
-        f"освобождён."
-    )
+    # Notify waiting users
+    from tbot_sheduler.bot.waiting_service import notify_waiting_users
+    notified = await notify_waiting_users(db_session, slot_id, context.bot)
+
+    parts = [
+        f"✅ Слот #{slot_id} ({slot.date} {slot.start_time}–{slot.end_time}) освобождён."
+    ]
+    if notified:
+        parts.append(f"📬 Уведомлено {notified} ожидающих.")
+    await update.message.reply_text("\n".join(parts))
 
 
 @with_db

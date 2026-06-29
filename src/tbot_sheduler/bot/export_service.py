@@ -44,7 +44,7 @@ async def export_schedule_json(
             "status": "booked" if slot.bookings else "available",
         }
         if slot.bookings:
-            booking = slot.bookings[0]
+            booking = slot.bookings[0]  # UniqueConstraint(slot_id) guarantees 1 booking
             item["booked_by"] = {
                 "user_id": booking.user_id,
                 "user_name": booking.user_name,
