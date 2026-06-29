@@ -11,9 +11,30 @@ from telegram.ext import ContextTypes
 
 from tbot_sheduler.core.auth import check_role
 from tbot_sheduler.core.config import WEB_APP_URL
+from tbot_sheduler.core.deps import with_db
 from tbot_sheduler.models import AuditLog, Channel, Slot
 
 logger = logging.getLogger(__name__)
+
+
+async def _get_channel_for_admin(
+    db_session: AsyncSession, admin
+) -> Channel | None:
+    """Find the channel the admin (owner or moderator) has access to.
+
+    For owners: Channel.owner_id == admin.id
+    For moderators: Channel.owner_id == the owner who added them (admin.added_by)
+    """
+    if admin.role == "owner":
+        result = await db_session.execute(
+            select(Channel).where(Channel.owner_id == admin.id)
+        )
+    else:
+        # Moderator — channel is owned by the admin who added them
+        result = await db_session.execute(
+            select(Channel).where(Channel.owner_id == admin.added_by)
+        )
+    return result.scalar_one_or_none()
 
 
 async def _log_action(
@@ -31,6 +52,7 @@ async def _log_action(
     await db_session.commit()
 
 
+@with_db
 @check_role("owner", "moderator")
 async def create_slots_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -59,10 +81,11 @@ async def create_slots_command(
     )
 
 
+@with_db
 @check_role("owner", "moderator")
 async def slots_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /slots — view all slots."""
-    db_session: AsyncSession = context.bot_data["db_session"]
+    db_session: AsyncSession = context.bot_data["db"]
 
     user_id = update.effective_user.id
     # Find the admin's channel
@@ -76,10 +99,7 @@ async def slots_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("⚠️ Вы не зарегистрированы как администратор.")
         return
 
-    channel_result = await db_session.execute(
-        select(Channel).where(Channel.owner_id == admin.id)
-    )
-    channel = channel_result.scalar_one_or_none()
+    channel = await _get_channel_for_admin(db_session, admin)
     if not channel:
         await update.message.reply_text(
             "⚠️ Канал не настроен. Выполните /setup."
@@ -136,12 +156,13 @@ async def slots_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(text, parse_mode="HTML")
 
 
+@with_db
 @check_role("owner", "moderator")
 async def free_slot_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Handle /free_slot <id> — force free a slot by admin."""
-    db_session: AsyncSession = context.bot_data["db_session"]
+    db_session: AsyncSession = context.bot_data["db"]
     user_id = update.effective_user.id
 
     if not context.args:
@@ -193,12 +214,13 @@ async def free_slot_command(
     )
 
 
+@with_db
 @check_role("owner", "moderator")
 async def broadcast_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     """Handle /broadcast — send booking button to channel."""
-    db_session: AsyncSession = context.bot_data["db_session"]
+    db_session: AsyncSession = context.bot_data["db"]
     user_id = update.effective_user.id
 
     from tbot_sheduler.models import Admin
@@ -212,10 +234,7 @@ async def broadcast_command(
         await update.message.reply_text("⚠️ Вы не зарегистрированы.")
         return
 
-    channel_result = await db_session.execute(
-        select(Channel).where(Channel.owner_id == admin.id)
-    )
-    channel = channel_result.scalar_one_or_none()
+    channel = await _get_channel_for_admin(db_session, admin)
 
     if not channel:
         await update.message.reply_text(
