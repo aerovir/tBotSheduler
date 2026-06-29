@@ -22,6 +22,7 @@ async def schedule_notification(
     notify_at: datetime,
     slot_date: str,
     slot_time: str,
+    db_session: AsyncSession | None = None,
 ) -> str | None:
     """Schedule a JobQueue task for notification.
 
@@ -32,6 +33,7 @@ async def schedule_notification(
         notify_at: When to send the notification
         slot_date: Date string for the message
         slot_time: Time string for the message
+        db_session: If provided, saves job_id to Notification record.
 
     Returns:
         Job ID string if scheduled, None if JobQueue unavailable.
@@ -54,6 +56,24 @@ async def schedule_notification(
         },
         name=f"notify_{booking_id}",
     )
+
+    # Save job_id to Notification record so cancel can find and remove it
+    if db_session and job.name:
+        try:
+            await db_session.execute(
+                text("UPDATE notification SET job_id = :job_id WHERE booking_id = :bid"),
+                {"job_id": job.name, "bid": booking_id},
+            )
+            await db_session.commit()
+            logger.debug(
+                "Saved job_id '%s' for notification booking_id=%d",
+                job.name, booking_id,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to save job_id for booking %d: %s",
+                booking_id, e,
+            )
 
     logger.info(
         "Scheduled notification for booking %d in %.0f seconds (at %s)",

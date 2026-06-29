@@ -149,6 +149,7 @@ async def book_slot(
                 notify_at=notify_at,
                 slot_date=result.get("date", ""),
                 slot_time=f"{result.get('start_time', '')}-{result.get('end_time', '')}",
+                db_session=db_session,
             )
     except Exception as e:
         logger.error("Failed to schedule notification: %s", e)
@@ -239,6 +240,7 @@ async def change_book(
                 notify_at=notify_at,
                 slot_date=result.get("date", ""),
                 slot_time=f"{result.get('start_time', '')}-{result.get('end_time', '')}",
+                db_session=db_session,
             )
     except Exception as e:
         logger.error("Failed to reschedule notification after change: %s", e)
