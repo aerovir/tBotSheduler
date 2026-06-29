@@ -39,6 +39,10 @@ class Booking(Base):
             "user_id", "slot_id",
             name="uq_booking_user_slot"
         ),
+        UniqueConstraint(
+            "slot_id",
+            name="uq_booking_slot"
+        ),
     )
 
     def __repr__(self) -> str:

@@ -5,7 +5,7 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select, and_
+from sqlalchemy import exc, select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tbot_sheduler.models import Booking, Slot, AuditLog, Notification
@@ -50,8 +50,10 @@ async def create_booking(
 ) -> dict[str, Any]:
     """Create a booking.
 
-    Race condition protection via unique constraint on (user_id, slot_id)
-    and slot-level check before insert.
+    Race condition protection via:
+    - UniqueConstraint (user_id, slot_id) — предотвращает двойной клик
+    - UniqueConstraint (slot_id) — предотвращает двойную бронь разными пользователями
+    - IntegrityError перехватывается и возвращает ошибку
 
     Returns:
         Dict with booking info or error.
@@ -68,7 +70,7 @@ async def create_booking(
     if not slot.is_active:
         return {"success": False, "error": "Слот неактивен."}
 
-    # Check if already booked by this user
+    # Check if already booked by this user (локальная проверка до INSERT)
     existing = await db_session.execute(
         select(Booking).where(
             Booking.slot_id == slot_id,
@@ -81,51 +83,52 @@ async def create_booking(
             "error": "Вы уже забронировали этот слот.",
         }
 
-    # Check if slot is taken by someone else
-    other_bookings = await db_session.execute(
-        select(Booking).where(Booking.slot_id == slot_id)
-    )
-    if other_bookings.scalar_one_or_none():
+    # Create booking (БД гарантирует уникальность slot_id через uq_booking_slot)
+    try:
+        booking = Booking(
+            slot_id=slot_id,
+            user_id=user_id,
+            user_name=user_name,
+            comment=comment,
+            notify_minutes=notify_minutes,
+        )
+        db_session.add(booking)
+        await db_session.flush()
+
+        # Create notification record
+        slot_datetime = datetime.combine(slot.date, slot.start_time)
+        notify_at = slot_datetime - timedelta(minutes=notify_minutes)
+
+        notification = Notification(
+            booking_id=booking.id,
+            user_id=user_id,
+            notify_at=notify_at,
+            sent=False,
+        )
+        db_session.add(notification)
+        await db_session.flush()
+
+        # Audit log
+        log = AuditLog(
+            action="booking_created",
+            user_id=user_id,
+            slot_id=slot_id,
+            booking_id=booking.id,
+            details={"notify_minutes": notify_minutes},
+        )
+        db_session.add(log)
+
+        await db_session.commit()
+    except exc.IntegrityError:
+        await db_session.rollback()
+        logger.warning(
+            "Race condition: slot %d double-booked by user %d (IntegrityError)",
+            slot_id, user_id,
+        )
         return {
             "success": False,
             "error": "Этот слот уже занят.",
         }
-
-    # Create booking
-    booking = Booking(
-        slot_id=slot_id,
-        user_id=user_id,
-        user_name=user_name,
-        comment=comment,
-        notify_minutes=notify_minutes,
-    )
-    db_session.add(booking)
-    await db_session.flush()
-
-    # Create notification record
-    slot_datetime = datetime.combine(slot.date, slot.start_time)
-    notify_at = slot_datetime - timedelta(minutes=notify_minutes)
-
-    notification = Notification(
-        booking_id=booking.id,
-        user_id=user_id,
-        notify_at=notify_at,
-        sent=False,
-    )
-    db_session.add(notification)
-    await db_session.flush()
-
-    # Audit log
-    log = AuditLog(
-        action="booking_created",
-        user_id=user_id,
-        slot_id=slot_id,
-        booking_id=booking.id,
-        details={"notify_minutes": notify_minutes},
-    )
-    db_session.add(log)
-
-    await db_session.commit()
 
     return {
         "success": True,
